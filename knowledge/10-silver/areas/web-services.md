@@ -10,12 +10,13 @@
 | 8081 | Open WebUI | `open-webui` | 起動しない |
 | 7860 | Hunyuan3D | `hunyuan3d` | 起動しない |
 | 7861 | Pixal3D | `pixal3d` | 起動しない |
-| 8188 | ComfyUI | （未導入） | — |
+| 8188 | ComfyUI | `comfyui` | 起動しない |
 | 11434 | Ollama API | `ollama`（system） | 起動する |
 
 - 8080 は元々 Open WebUI が使っていた。入口ページを置くために 2026-09-22 に Open WebUI を 8081 へ移した。
   元の設定は `~/.config/systemd/user/open-webui.service.bak` にあり、`tools/portal/setup-server.sh --revert` で戻せる。
-- 8188 は ComfyUI 用に空けてあるだけで、ComfyUI は導入していない。入口ページには「未導入」と出る。
+- 8188 は ComfyUI（`tools/comfyui`）。enable はしていない。使い方と「画像 1 枚から 3D」の入口は
+  `knowledge/10-silver/areas/comfyui.md` を Read する。
 - Ollama だけは 127.0.0.1 で待受し、LAN に公開していない。入口ページ・Open WebUI・Hunyuan3D・Pixal3D は
   0.0.0.0 で待受する。
 

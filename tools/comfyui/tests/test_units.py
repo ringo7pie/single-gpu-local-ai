@@ -85,6 +85,29 @@ def make_workflow(with_wtivo: bool = True) -> dict:
     }
 
 
+def make_easy_template() -> dict:
+    """ComfyUI 同梱の「画像 → 3D」テンプレート（3d_pixal3d_trellis2_image_to_model.json）の要点だけを小さく作る。"""
+    return {
+        "id": "aa77013b-18f1-4679-9678-6d455d3536c5",
+        "revision": 0,
+        "last_node_id": 323,
+        "last_link_id": 1296,
+        "nodes": [
+            {"id": 122, "type": "LoadImage", "pos": [-5080, 510], "size": [740, 870], "order": 9, "mode": 0,
+             "widgets_values": ["viking_wolf_rune_axe.png", "image"]},
+            {"id": 313, "type": "MarkdownNote", "pos": [-5860, 470], "size": [660, 950], "order": 10, "mode": 0,
+             "widgets_values": ["note"]},
+            {"id": 322, "type": "Save3DAdvanced", "pos": [4020, -170], "size": [1660, 2090], "order": 65, "mode": 0,
+             "widgets_values": ["3d/ComfyUI", "", 1024, 1024]},
+        ],
+        "links": [],
+        "groups": [{"title": "Upload Input Image Here", "bounding": [-5090, 440, 770, 970]}],
+        "config": {},
+        "extra": {"ds": {"scale": 0.1, "offset": [6002.4, 3142.4]}, "frontendVersion": "1.49.6"},
+        "version": 0.4,
+    }
+
+
 def node_of(workflow: dict, node_id: int) -> dict:
     return next(node for node in workflow["nodes"] if node["id"] == node_id)
 
@@ -338,6 +361,137 @@ def test_adapt_main_reports_format_error(tmp_path: Path, capsys: pytest.CaptureF
         (source / file_name).write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
     assert adapt_workflows.main(["--source-dir", str(source), "--dest-dir", str(tmp_path / "dest")]) == 1
     assert "写せませんでした" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- 入口ワークフロー（Image_to_3D.json）
+
+
+def test_make_easy_image_to_3d_sets_app_mode_and_adds_note() -> None:
+    template = make_easy_template()
+    easy = workflows.make_easy_image_to_3d(template)
+
+    assert easy["extra"]["linearMode"] is True
+    assert easy["extra"]["linearData"] == {"inputs": [[122, "image"]], "outputs": [322]}
+    assert easy["extra"]["ds"] == workflows.EASY_VIEW
+    assert easy["extra"]["frontendVersion"] == "1.49.6"  # 触らない項目は残る
+
+    note = node_of(easy, 324)
+    assert note["type"] == "MarkdownNote" and note["title"] == workflows.EASY_NOTE_TITLE
+    assert note["widgets_values"] == [workflows.EASY_NOTE_TEXT]
+    assert note["order"] == 66 and easy["last_node_id"] == 324
+    # LoadImage の左上（既存のノート 313 とは重ならない位置）
+    assert note["pos"] == [-5080 - 780, 510 - 570]
+    assert note["pos"][1] + note["size"][1] <= node_of(template, 313)["pos"][1]
+
+
+def test_make_easy_image_to_3d_does_not_touch_the_template_or_other_nodes() -> None:
+    template = make_easy_template()
+    snapshot = copy.deepcopy(template)
+    easy = workflows.make_easy_image_to_3d(template)
+
+    assert template == snapshot
+    assert [node for node in easy["nodes"] if node["id"] != 324] == snapshot["nodes"]
+    assert easy["links"] == snapshot["links"] and easy["groups"] == snapshot["groups"]
+
+
+def test_make_easy_image_to_3d_gets_distinct_deterministic_id() -> None:
+    template = make_easy_template()
+    first = workflows.make_easy_image_to_3d(template)
+    second = workflows.make_easy_image_to_3d(template)
+    assert first["id"] == second["id"] != template["id"]
+    assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", first["id"])
+
+
+@pytest.mark.parametrize("node_type", ["LoadImage", "Save3DAdvanced"])
+def test_make_easy_image_to_3d_rejects_missing_or_duplicated_node(node_type: str) -> None:
+    missing = make_easy_template()
+    missing["nodes"] = [node for node in missing["nodes"] if node["type"] != node_type]
+    with pytest.raises(workflows.WorkflowFormatError, match=node_type):
+        workflows.make_easy_image_to_3d(missing)
+
+    duplicated = make_easy_template()
+    duplicated["nodes"].append({**node_of(duplicated, 122 if node_type == "LoadImage" else 322), "id": 400})
+    with pytest.raises(workflows.WorkflowFormatError, match=node_type):
+        workflows.make_easy_image_to_3d(duplicated)
+
+
+def test_write_easy_workflow_is_idempotent_and_keeps_user_edits(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.json"
+    template_path.write_text(json.dumps(make_easy_template()), encoding="utf-8")
+    dest = tmp_path / "workflows" / "Image_to_3D.json"
+
+    assert adapt_workflows.write_easy_workflow(template_path, dest, False) == (dest, "written")
+    written = json.loads(dest.read_text(encoding="utf-8"))
+    assert written["extra"]["linearData"]["outputs"] == [322]
+    assert adapt_workflows.write_easy_workflow(template_path, dest, False)[1] == "unchanged"
+
+    dest.write_text("{}", encoding="utf-8")  # UI で手直しして保存した想定
+    assert adapt_workflows.write_easy_workflow(template_path, dest, False)[1] == "kept"
+    assert dest.read_text(encoding="utf-8") == "{}"
+    assert adapt_workflows.write_easy_workflow(template_path, dest, True)[1] == "written"
+
+
+def test_adapt_main_writes_easy_workflow_unless_disabled(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    for file_name in config.WORKFLOW_FILES:
+        (source / file_name).write_text(json.dumps(make_workflow(), indent=2), encoding="utf-8")
+    template_path = tmp_path / "template.json"
+    template_path.write_text(json.dumps(make_easy_template()), encoding="utf-8")
+    easy_dest = tmp_path / "easy" / "Image_to_3D.json"
+    base = [
+        "--source-dir", str(source), "--dest-dir", str(tmp_path / "dest"),
+        "--easy-template", str(template_path), "--easy-dest", str(easy_dest),
+    ]
+
+    assert adapt_workflows.main([*base, "--no-easy"]) == 0
+    assert not easy_dest.exists()
+    assert adapt_workflows.main(base) == 0
+    assert easy_dest.is_file()
+
+
+def test_adapt_main_reports_missing_easy_template(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    for file_name in config.WORKFLOW_FILES:
+        (source / file_name).write_text(json.dumps(make_workflow(), indent=2), encoding="utf-8")
+    monkeypatch.setattr(adapt_workflows, "find_easy_template", lambda *_args, **_kwargs: None)
+    exit_code = adapt_workflows.main(
+        ["--source-dir", str(source), "--dest-dir", str(tmp_path / "dest"), "--easy-dest", str(tmp_path / "e.json")]
+    )
+    assert exit_code == 1
+    assert "見つかりません" in capsys.readouterr().err
+
+
+def test_real_easy_template_matches_expected_shape_when_installed() -> None:
+    candidates = sorted(
+        (config.TOOL_DIR / ".venv" / "lib").glob(
+            f"python*/site-packages/comfyui_workflow_templates_json/templates/{config.EASY_TEMPLATE_FILE}"
+        )
+    )
+    if not candidates:
+        pytest.skip("comfyui-workflow-templates-json が入っていない（setup-server.sh の前）")
+    template = json.loads(candidates[0].read_text(encoding="utf-8"))
+    easy = workflows.make_easy_image_to_3d(template)
+    nodes = {node["id"]: node for node in template["nodes"]}
+    (input_id, input_widget), = easy["extra"]["linearData"]["inputs"]
+    (output_id,) = easy["extra"]["linearData"]["outputs"]
+    assert nodes[input_id]["type"] == "LoadImage" and input_widget == "image"
+    assert nodes[output_id]["type"] == "Save3DAdvanced"
+    # 重みの名前は config の取得対象に含まれる（テンプレートが別の重みを要求していないこと）
+    required = {
+        model["name"]
+        for node in template["nodes"]
+        for model in (node.get("properties") or {}).get("models") or []
+    }
+    assert required, "テンプレートに models の記述が無い"
+    installed = {entry[1] for entry in config.MODEL_FILES}
+    assert required <= installed, sorted(required - installed)
+    # すでに書き出し済みなら、今のテンプレートから作った内容と同じ（古いテンプレートのままではない）
+    if config.EASY_WORKFLOW_PATH.is_file():
+        assert config.EASY_WORKFLOW_PATH.read_text(encoding="utf-8") == workflows.dump_workflow(easy)
 
 
 def test_fallback_name() -> None:

@@ -22,6 +22,10 @@ INPUT_DIR = COMFYUI_DIR / "input"
 WORKFLOWS_DIR = COMFYUI_DIR / "user" / "default" / "workflows" / "PixelArtistry"
 # 予備案（WTiVo を外したもの）の写しの置き場。scripts/adapt_workflows.py --fallback が書く。
 FALLBACK_WORKFLOWS_DIR = COMFYUI_DIR / "user" / "default" / "workflows" / "PixelArtistry_noWTiVo"
+# 「画像を 1 枚入れるだけ」で 3D を作る入口。ComfyUI 同梱のテンプレート（comfyui-workflow-templates）を土台に、
+# scripts/adapt_workflows.py が写す。探しやすいように、フォルダに入れず直下に置く。
+EASY_TEMPLATE_FILE = "3d_pixal3d_trellis2_image_to_model.json"
+EASY_WORKFLOW_PATH = COMFYUI_DIR / "user" / "default" / "workflows" / "Image_to_3D.json"
 EXTENSIONS_DIR = VENDOR_DIR / "extensions"
 PIXELARTISTRY_DIR = VENDOR_DIR / "PixelArtistry-Watertight-Meshes"
 WTIVO_SRC_DIR = VENDOR_DIR / "WTiVo-WatertightVoxel"

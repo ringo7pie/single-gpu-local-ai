@@ -6,6 +6,10 @@
 使わない。/snap/bin/blender は snap run が comfyui の cgroup の外へ子を移すので使わない）。
 それ以外は変えない。書式は配布元と同じ indent=2・末尾改行なしで、ensure_ascii=False で書く。
 
+そのほかに、画像を 1 枚入れて Run を押すだけの入口 Image_to_3D.json も書く。ComfyUI 同梱のテンプレート
+（comfyui-workflow-templates の 3d_pixal3d_trellis2_image_to_model.json）を土台に、アプリモードと手順のノートを足す
+（cfui.workflows.make_easy_image_to_3d）。--no-easy で書かない。
+
 --fallback を付けると、予備案の写しも書く（WTiVo を外し、直後の LODTailor の Voxel Remesh を
 relative_voxel_size=1/1536 で使う）。WTiVo を含まない 03 は予備案を作らない。
 
@@ -18,6 +22,7 @@ relative_voxel_size=1/1536 で使う）。WTiVo を含まない 03 は予備案�
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from collections.abc import Sequence
@@ -32,6 +37,7 @@ from cfui.workflows import (  # noqa: E402
     WorkflowFormatError,
     dump_workflow,
     has_wtivo,
+    make_easy_image_to_3d,
     make_fallback,
     set_blender_path,
 )
@@ -118,6 +124,27 @@ def adapt_all(
     return results
 
 
+def find_easy_template(template_file: str = config.EASY_TEMPLATE_FILE) -> Path | None:
+    """ComfyUI 同梱のテンプレートの場所を返す。comfyui-workflow-templates-json が見つからなければ None。"""
+
+    spec = importlib.util.find_spec("comfyui_workflow_templates_json")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    for location in spec.submodule_search_locations:
+        candidate = Path(location) / "templates" / template_file
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def write_easy_workflow(template_path: Path, dest_path: Path, force: bool) -> tuple[Path, str]:
+    """入口ワークフロー（画像を入れて Run を押すだけ）を dest_path へ書く。結果は write_if_safe と同じ。"""
+
+    template = json.loads(template_path.read_text(encoding="utf-8"))
+    easy = make_easy_image_to_3d(template)
+    return dest_path, write_if_safe(dest_path, dump_workflow(easy), force)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PixelArtistry のワークフローを ComfyUI へ写す")
     parser.add_argument(
@@ -148,6 +175,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=FALLBACK_RELATIVE_VOXEL_SIZE,
         help="予備案の LODTailor の relative_voxel_size（既定: 1/1536）",
     )
+    parser.add_argument(
+        "--no-easy", action="store_true", help="入口ワークフロー（Image_to_3D.json）を書かない"
+    )
+    parser.add_argument(
+        "--easy-template",
+        type=Path,
+        default=None,
+        help="入口ワークフローの土台（既定: comfyui-workflow-templates の 3d_pixal3d_trellis2_image_to_model.json）",
+    )
+    parser.add_argument(
+        "--easy-dest",
+        type=Path,
+        default=config.EASY_WORKFLOW_PATH,
+        help="入口ワークフローの書き出し先（既定: vendor/ComfyUI/user/default/workflows/Image_to_3D.json）",
+    )
     parser.add_argument("--force", action="store_true", help="内容が違っても上書きする")
     return parser
 
@@ -168,6 +210,23 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     for path, status in results:
         print(f"  {path.name}: {_STATUS_LABELS[status]}（{path.parent}）")
+    if args.no_easy:
+        return 0
+
+    template_path = args.easy_template or find_easy_template()
+    if template_path is None:
+        print(
+            "入口ワークフロー（Image_to_3D.json）を書けませんでした: ComfyUI 同梱のテンプレート"
+            f"（{config.EASY_TEMPLATE_FILE}）が見つかりません。venv の python で実行してください",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        path, status = write_easy_workflow(template_path, args.easy_dest, args.force)
+    except (OSError, json.JSONDecodeError, WorkflowFormatError) as exc:
+        print(f"入口ワークフロー（Image_to_3D.json）を書けませんでした: {exc}", file=sys.stderr)
+        return 1
+    print(f"  {path.name}: {_STATUS_LABELS[status]}（{path.parent}）")
     return 0
 
 

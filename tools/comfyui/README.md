@@ -13,7 +13,7 @@
 - 7860 / 7861: Hunyuan3D / Pixal3D（VRAM を取り合う。同時に生成しないこと）
 - 8080: 入口ページ（`tools/portal`）
 
-サーバー IP は `<server-ip>`（例: 192.168.1.10）。起動後は `http://<server-ip>:8188` → 左の Workflows → `PixelArtistry`。
+サーバー IP は `<server-ip>`（例: 192.168.1.10）。起動後は `http://<server-ip>:8188` → 左の Workflows → `Image_to_3D`（画像 1 枚から 3D。下の「画像 1 枚から 3D」）か `PixelArtistry`（防水メッシュ）。
 
 ## 固定している版
 
@@ -90,6 +90,53 @@ systemctl --user stop comfyui
   Blender 4.2 以降、アドオンの多くは extensions に入るため、scripts だけでなく extensions も空にしている。
 - Ollama（Qwen）と VRAM を分け合う。生成前に `~/.claude/scripts/vram-policy.sh status` で空きを見て、
   足りなければ Qwen を降ろす。Hunyuan3D / Pixal3D とは同時に生成しない。
+
+## 画像 1 枚から 3D（Image_to_3D.json）
+
+画像を 1 枚入れて Run を押すだけで、テクスチャ付きの 3D モデル（GLB）を作る入口。
+`http://<server-ip>:8188` → 左の Workflows → `Image_to_3D`。
+
+1. **Load Image** で 3D にしたい画像を選ぶ（ドラッグ＆ドロップでもよい）。
+2. **Run** を押す。ほかの設定は触らなくてよい。
+3. **Save 3D** のビューアに結果が出る。GLB はサーバーの `vendor/ComfyUI/output/3d/ComfyUI_*.glb` に保存される。
+
+- 土台は ComfyUI 同梱のテンプレート `3d_pixal3d_trellis2_image_to_model`（comfyui-workflow-templates 0.11.85）。
+  Pixal3D（既定）か TRELLIS.2 で形を作り、RemeshMesh → DecimateMesh（70 万面）→ UV 展開 → PBR（ベースカラー・
+  金属/粗さ・AO 4096px、法線 2048px）のベイクまで行う。必要な重みは「重みの置き場」の 9 点に含まれ、追加の
+  ダウンロードは要らない（`tests/test_units.py` が、テンプレートの要求する重みが `MODEL_FILES` に入っていることを確かめる）。
+- `scripts/adapt_workflows.py`（`setup-server.sh` の [11/12]）が、テンプレートから次の 3 点だけを変えて
+  `vendor/ComfyUI/user/default/workflows/Image_to_3D.json` に書く（`cfui.workflows.make_easy_image_to_3d`）。
+  ノードの結線と値は変えない。
+  - アプリモード（`extra.linearMode` / `linearData`: 入力は LoadImage の `image`、出力は Save 3D）にする。
+    テンプレートは全体が入る縮尺 0.1 で開き、結果を出す Save 3D が入力から約 9,000 単位右にあるため。
+    グラフ表示に切り替えたときの初期表示は、画像を置く場所に寄せてある。
+  - 手順を書いた MarkdownNote を足す（画面だけのノード）。
+  - workflow の id をテンプレートの id から決まった別の UUID にする。
+- 既に書いたファイルを UI で手直ししていれば上書きしない（`--force` で上書き、`--no-easy` で書かない）。
+- GPU を使う。ほかのサービス（Hunyuan3D・Pixal3D・Strata）とは同時に動かさない（入口ページから ComfyUI を起動すれば自動で止まる）。
+
+### 実機試験の結果（2026-10-25、`--free-before`、`run_workflow.py run` で投入）
+
+| 入力 | 結果 | 時間 | cgroup の memory.peak / anon | VRAM のピーク | GLB |
+|---|---|---|---|---|---|
+| `viking_wolf_rune_axe.png`（既定のサンプル。この機体で初回） | 成功 | 172.7 秒 | 17.5 / 8.0 GiB（swap 0） | 12,598 MiB | 698,185 面・446,999 頂点・69.8 MB |
+| `D_superhero_female.png`（人物。背景は黒） | 成功 | 111.9 秒 | 18.0 / 7.8 GiB（swap 0） | 10,426 MiB | 47.4 MB |
+
+- 1 回目のノードの時間: KSampler 4 本が 47.0 / 25.3 / 13.3 / 9.0 秒、Pixal3D Conditioning 17.3 秒、Bake Ambient Occlusion 13.0 秒、
+  Bake Texture From Voxel 9.8 秒、Unwrap Mesh UVs 5.8 秒。2 回目が速いのは、重みがディスクキャッシュに載っていたためと考えられる（未確認）。
+- 斧の GLB を Blender 5.2.2（CPU）で 2 方向から描画して目で見た。形・ルーン・革巻き・木目が入力と一致し、側面から見ても破綻がない。
+  人物は全体の形・肌・下着が入力と一致する。顔は目元の模様が入力と違う（入力は無地）。
+- テンプレートが RemeshMesh / DecimateMesh で使う `DynamicCombo` を `run_workflow.py` が扱えなかったため、対応を足した
+  （下の「画面を使わずにワークフローを通す」）。画面（ブラウザ）での操作は確かめていない。特に **アプリモードの表示**
+  （入力欄と 3D の結果が出ること）は、フロントエンドのコードで 3D の出力の分岐（`Preview3d`）があることと、Save 3D の
+  出力の種類（`3d`）が合うことまでしか確かめていない。表示がおかしいときは、グラフ表示に切り替えて使う。
+
+### `qwen_3_4b.safetensors` が無いと言われたら
+
+`Value not in list: clip_name: 'qwen_3_4b.safetensors' not in []`（CLIPLoader）は、Z-Image や FLUX.2 klein などの
+**テキスト → 画像**のテンプレートを開いているときに出る（これらは文字エンコーダとして Qwen3 4B を使う）。3D 生成には要らない。
+その画面は閉じて、`Image_to_3D` を開く。テキスト → 画像を使いたいなら、モデル一式（文字エンコーダ・拡散モデル・VAE。
+数 GB〜十数 GB）を別に入れる必要がある（この機体には入れていない）。
 
 ## 点検（doctor）
 
@@ -265,6 +312,12 @@ tools/comfyui/.venv/bin/python tools/comfyui/scripts/measure_mesh.py OUT.glb --r
   が行う）。`run_workflow.py` は comfyui_frontend_package 1.53.6 の規則（widget の並び、seed の後ろの
   control_after_generate、`image_upload` の余分な値、bypass の素通し `_getBypassSlotIndex`、muted の入力の削除、
   Note / MarkdownNote / PrimitiveNode / Reroute の除外）を書き直したもの。subgraph は未対応で、使われていたら止める。
+- `DynamicCombo`（型 `COMFY_DYNAMICCOMBO_V3`。RemeshMesh の `sign_mode`、DecimateMesh の `placement_mode`）に対応している
+  （2026-10-25）。選択肢のキーを 1 つの値として読み、選ばれた選択肢の子の widget をその直後に並べる。API の入力名は
+  `sign_mode` と `sign_mode.qef` のように「親.子」（サーバーの `comfy_api/latest/_io.py` の `finalize_prefix` と同じ）。
+  これが無いと、`sign_mode: "udf"` を次の FLOAT（`band`）の値と読み誤る。Autogrow など他の動的な入力は未対応。
+  対応後、同梱テンプレートの変換は `MoGeInference` の `refine_steps`（テンプレートの保存後に増えた入力）の警告だけになり、
+  サーバーの `/prompt` の検証（`node_errors` なし）と実機の実行を通った。
 - 上書き: `--image`（LoadImage）、`--seed`（control_after_generate を持つ入力をすべて同じ値に）、
   `--backend pixal3d|trellis2`（題名に Trellis を含む PrimitiveBoolean）、`--mesh`（Trellis2MeshEncoder）、
   `--set NODE.INPUT=VALUE`。API から投入すると `randomize` は効かないので、`--seed` を付けなくても

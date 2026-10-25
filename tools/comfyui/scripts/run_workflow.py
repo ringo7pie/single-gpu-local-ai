@@ -11,6 +11,9 @@ comfyui_frontend_package 1.53.6 の settingStore-*.js を読んで合わせた�
   （例 KSampler の [42, "fixed", ...]）。image_upload などアップロード用の入力も 1 つ余分に持つ
   （LoadImage の [ファイル名, "image"]）。どちらも API には送らない。
   値が足りないとき（ワークフローの保存後にノードが入力を増やした）は既定値で埋める（画面と同じ）。
+  DynamicCombo（型 COMFY_DYNAMICCOMBO_V3。RemeshMesh の sign_mode など）は、選択肢のキーを 1 つの値として読み、
+  選んだ選択肢が持つ子の widget をその直後に並べる。API の入力名は「親.子」（sign_mode / sign_mode.qef）。
+  Autogrow など他の動的な入力は未対応（対応するノードの値は画面の並びと合わない可能性がある）。
 - リンクのある入力はリンクが勝つ。旧式の PrimitiveNode（画面だけのノード）からのリンクは、その値に置き換える。
   PrimitiveString / PrimitiveBoolean / ComfySwitchNode はサーバー側のノードなので、そのまま出す。
 - Note / MarkdownNote / PrimitiveNode / Reroute は画面だけのノードなので出さない。Reroute は素通しする。
@@ -44,8 +47,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import deque
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +77,8 @@ PRIMITIVE_WIDGET_TYPES = frozenset({"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"
 # 拡張が widget を作る型（Save3DAdvanced の viewport_state、ImageCropToMask の background など）。
 CUSTOM_WIDGET_TYPES = frozenset({"COLOR", "LOAD_3D", "LOAD_3D_ANIMATION"})
 UPLOAD_OPTION_KEYS = ("image_upload", "video_upload", "audio_upload", "file_upload")
+# 選択肢ごとに子の入力を持つ V3 の入力。object_info では ["COMFY_DYNAMICCOMBO_V3", {"options": [{"key", "inputs"}]}]。
+DYNAMIC_COMBO_TYPE = "COMFY_DYNAMICCOMBO_V3"
 # 画面は INT の入力名が seed / noise_seed なら、指定が無くても control_after_generate を付ける。
 LEGACY_SEED_NAMES = ("seed", "noise_seed")
 
@@ -108,6 +114,8 @@ class WidgetSlot:
     widget_type: str
     options: dict[str, Any]
     combo_values: tuple[Any, ...] | None
+    # DynamicCombo のときだけ、選択肢（{"key", "inputs"} の辞書）。combo_values にはそのキーが入る。
+    dynamic_options: tuple[dict[str, Any], ...] | None = None
 
 
 def iter_input_specs(node_def: dict[str, Any]) -> Iterator[tuple[str, Any, dict[str, Any], str]]:
@@ -130,6 +138,8 @@ def widget_type_of(input_type: Any, options: dict[str, Any]) -> str | None:
     """入力が画面で widget になるならその型を、ソケットだけなら None を返す。"""
     if options.get("forceInput"):
         return None
+    if input_type == DYNAMIC_COMBO_TYPE:
+        return "COMBO"
     if isinstance(input_type, list):
         return "COMBO"
     if "widgetType" in options:
@@ -156,18 +166,53 @@ def widget_layout(node_def: dict[str, Any], legacy_seed: bool = True) -> list[Wi
         widget_type = widget_type_of(input_type, options)
         if widget_type is None:
             continue
-        if isinstance(input_type, list):
-            combo_values: tuple[Any, ...] | None = tuple(input_type)
+        dynamic_options: tuple[dict[str, Any], ...] | None = None
+        if input_type == DYNAMIC_COMBO_TYPE:
+            dynamic_options = tuple(option for option in options.get("options") or () if isinstance(option, dict))
+            combo_values: tuple[Any, ...] | None = tuple(option.get("key") for option in dynamic_options)
+        elif isinstance(input_type, list):
+            combo_values = tuple(input_type)
         elif widget_type == "COMBO":
             combo_values = tuple(options.get("options") or ())
         else:
             combo_values = None
-        slots.append(WidgetSlot(name, "value", widget_type, options, combo_values))
+        slots.append(WidgetSlot(name, "value", widget_type, options, combo_values, dynamic_options))
         if has_control_widget(widget_type, name, options, legacy_seed):
             slots.append(WidgetSlot(name, "control", widget_type, options, None))
         if any(options.get(key) for key in UPLOAD_OPTION_KEYS):
             slots.append(WidgetSlot(name, "upload", widget_type, options, None))
     return slots
+
+
+def dynamic_child_slots(slot: WidgetSlot, selected: Any, legacy_seed: bool = True) -> list[WidgetSlot]:
+    """DynamicCombo が selected を選んでいるときに、その直後へ並ぶ子の widget（名前は「親.子」）。"""
+    for option in slot.dynamic_options or ():
+        if option.get("key") == selected:
+            children = widget_layout({"input": option.get("inputs") or {}}, legacy_seed)
+            return [replace(child, input_name=f"{slot.input_name}.{child.input_name}") for child in children]
+    return []
+
+
+def expand_layout(node_def: dict[str, Any], raw_values: list[Any], legacy_seed: bool = True) -> list[WidgetSlot]:
+    """widget_layout に、DynamicCombo が選んでいる選択肢の子の widget を足した、widgets_values と 1 対 1 の並び。
+
+    どの選択肢が選ばれているかは widgets_values の値で決まるので、値を先頭から読みながら広げる。
+    値が足りないときの選択肢は、最初の選択肢（既定値と同じ）とみなす。
+    """
+    expanded: list[WidgetSlot] = []
+    pending = deque(widget_layout(node_def, legacy_seed))
+    while pending:
+        slot = pending.popleft()
+        expanded.append(slot)
+        if slot.kind != "value" or slot.dynamic_options is None:
+            continue
+        position = len(expanded) - 1
+        if position < len(raw_values):
+            selected = raw_values[position]
+        else:
+            _found, selected = default_widget_value(slot)
+        pending.extendleft(reversed(dynamic_child_slots(slot, selected, legacy_seed)))
+    return expanded
 
 
 def default_widget_value(slot: WidgetSlot) -> tuple[bool, Any]:
@@ -227,10 +272,10 @@ def assign_widget_values(
         return values, controls, warnings
 
     raw_values = list(widgets_values or [])
-    layout = widget_layout(node_def)
+    layout = expand_layout(node_def, raw_values)
     if len(raw_values) != len(layout):
         # seed / noise_seed の互換規則を外すと数が合うなら、そちらを使う
-        alternative = widget_layout(node_def, legacy_seed=False)
+        alternative = expand_layout(node_def, raw_values, legacy_seed=False)
         if len(alternative) == len(raw_values) and alternative != layout:
             layout = alternative
         elif len(raw_values) > len(layout):

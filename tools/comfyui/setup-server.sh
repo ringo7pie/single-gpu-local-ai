@@ -409,7 +409,7 @@ fi
 
 # ---------------------------------------------------------------- [11/12]
 echo
-echo "[11/12] PixelArtistry のワークフロー（$PIXELARTISTRY_COMMIT）"
+echo "[11/12] PixelArtistry のワークフローと、画像 1 枚から 3D の入口 Image_to_3D（$PIXELARTISTRY_COMMIT）"
 fetch_pinned_repo "$PIXELARTISTRY_URL" "$PIXELARTISTRY_COMMIT" \
   "$VENDOR_DIR/PixelArtistry-Watertight-Meshes" "PixelArtistry-Watertight-Meshes"
 ADAPT_ARGS=()
@@ -472,5 +472,5 @@ echo
 echo "次にやること:"
 echo "  - 手動起動: $RUNNER serve"
 echo "  - systemd 経由: systemctl --user start comfyui"
-echo "  - ブラウザ: http://$SERVER_HOST:8188 → Workflows → PixelArtistry"
+echo "  - ブラウザ: http://$SERVER_HOST:8188 → Workflows → Image_to_3D（画像 1 枚から 3D）／PixelArtistry（防水メッシュ）"
 exit "$DOCTOR_RC"

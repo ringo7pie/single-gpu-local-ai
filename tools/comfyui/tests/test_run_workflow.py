@@ -106,6 +106,28 @@ OBJECT_INFO = {
         "input": {"required": {"items": ["COMBO", {"options": ["a", "b"], "multiselect": True}]}},
         "input_order": {"required": ["items"]},
     },
+    "RemeshLike": {  # DynamicCombo（COMFY_DYNAMICCOMBO_V3）。実物の RemeshMesh と同じく、選択肢ごとに子の入力が違う
+        "input": {"required": {
+            "mesh": ["MESH", {}],
+            "resolution": ["INT", {"default": 512}],
+            "sign_mode": ["COMFY_DYNAMICCOMBO_V3", {"options": [
+                {"key": "udf", "inputs": {"required": {
+                    "qef": ["BOOLEAN", {"default": False}],
+                    "drop_inverted_components": ["BOOLEAN", {"default": False}],
+                }}},
+                {"key": "sdf", "inputs": {"required": {
+                    "qef": ["BOOLEAN", {"default": True}],
+                    "manifold": ["BOOLEAN", {"default": False}],
+                    "level": ["COMFY_DYNAMICCOMBO_V3", {"options": [
+                        {"key": "low", "inputs": {"required": {}}},
+                        {"key": "high", "inputs": {"required": {"iterations": ["INT", {"default": 4}]}}},
+                    ]}],
+                }}},
+            ]}],
+            "band": ["FLOAT", {"default": 1.0}],
+        }},
+        "input_order": {"required": ["mesh", "resolution", "sign_mode", "band"]},
+    },
 }
 
 
@@ -224,6 +246,64 @@ def test_assign_widget_values_warns_on_extra_values() -> None:
     values, _controls, warnings = rw.assign_widget_values(OBJECT_INFO["Upsample"], [1024, 5, 6], "#14")
     assert values == {"target_resolution": 1024}
     assert "後ろの 2 個" in warnings[0]
+
+
+def test_dynamic_combo_children_follow_the_selected_option() -> None:
+    values, controls, warnings = rw.assign_widget_values(
+        OBJECT_INFO["RemeshLike"], [768, "udf", False, True, 1.5], "#241"
+    )
+    assert values == {
+        "resolution": 768, "sign_mode": "udf",
+        "sign_mode.qef": False, "sign_mode.drop_inverted_components": True, "band": 1.5,
+    }
+    assert controls == {} and warnings == []
+
+    values, _controls, warnings = rw.assign_widget_values(
+        OBJECT_INFO["RemeshLike"], [256, "sdf", True, False, "low", 2.0], "#241"
+    )
+    assert values == {
+        "resolution": 256, "sign_mode": "sdf", "sign_mode.qef": True, "sign_mode.manifold": False,
+        "sign_mode.level": "low", "band": 2.0,
+    }
+    assert warnings == []
+
+
+def test_dynamic_combo_nested_option_adds_its_own_children() -> None:
+    values, _controls, warnings = rw.assign_widget_values(
+        OBJECT_INFO["RemeshLike"], [256, "sdf", True, False, "high", 9, 2.0], "#241"
+    )
+    assert values["sign_mode.level"] == "high"
+    assert values["sign_mode.level.iterations"] == 9
+    assert values["band"] == 2.0
+    assert warnings == []
+
+
+def test_dynamic_combo_missing_values_use_first_option_and_defaults() -> None:
+    values, _controls, warnings = rw.assign_widget_values(OBJECT_INFO["RemeshLike"], [768], "#241")
+    assert values["sign_mode"] == "udf"
+    assert values["sign_mode.qef"] is False and values["sign_mode.drop_inverted_components"] is False
+    assert values["band"] == 1.0
+    assert any("足りない" in warning for warning in warnings)
+
+
+def test_dynamic_combo_unknown_key_warns_and_adds_no_children() -> None:
+    values, _controls, warnings = rw.assign_widget_values(OBJECT_INFO["RemeshLike"], [768, "nope", 1.5], "#241")
+    assert values["sign_mode"] == "nope" and values["band"] == 1.5
+    assert not any(name.startswith("sign_mode.") for name in values)
+    assert any("選択肢に無い値" in warning for warning in warnings)
+
+
+def test_dynamic_combo_is_converted_with_dotted_input_names() -> None:
+    workflow = {
+        "nodes": [node(1, "RemeshLike", [768, "udf", False, True, 1.5], inputs=[socket("mesh", "MESH")])],
+        "links": [],
+    }
+    prompt, report = rw.convert_workflow(workflow, OBJECT_INFO)
+    assert prompt["1"]["inputs"] == {
+        "resolution": 768, "sign_mode": "udf",
+        "sign_mode.qef": False, "sign_mode.drop_inverted_components": True, "band": 1.5,
+    }
+    assert report["warnings"] == []
 
 
 def test_assign_widget_values_dict_form() -> None:

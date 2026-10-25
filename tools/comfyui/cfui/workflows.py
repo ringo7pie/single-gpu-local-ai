@@ -51,6 +51,27 @@ FALLBACK_RELATIVE_VOXEL_SIZE = 1.0 / 1536.0
 
 # 予備案の写しの UUID を、元の id から決まった値で作るための名前空間。
 _FALLBACK_UUID_NAMESPACE = uuid.UUID("6f1d3f0e-6b0b-4c55-9d5a-2f8f3d9a6c01")
+# 入口ワークフロー（make_easy_image_to_3d）の UUID を、テンプレートの id から決まった値で作るための名前空間。
+_EASY_UUID_NAMESPACE = uuid.UUID("b3a6f0c2-5d1e-4a7b-9c38-0e2d7f4a1b65")
+
+LOAD_IMAGE_NODE_TYPE = "LoadImage"
+SAVE_3D_NODE_TYPE = "Save3DAdvanced"
+MARKDOWN_NOTE_NODE_TYPE = "MarkdownNote"
+
+EASY_NOTE_TITLE = "使い方（画像 1 枚から 3D）"
+EASY_NOTE_TEXT = """## 画像 1 枚から 3D モデルを作る
+
+1. **Load Image** で、3D にしたい画像を選ぶ（「Upload Input Image Here」の枠。ドラッグ＆ドロップでもよい）。
+2. **実行（Run）** を押す。ほかの設定は触らなくてよい。
+3. 終わると **Save 3D** のビューアに 3D モデルが出る。GLB は ComfyUI の `output/3d/` に保存される。
+
+- 1 つの物体が大きく写った画像が向く。背景は自動で取り除く。
+- 「Switch Model Here」のスイッチ: false = Pixal3D（既定）、true = TRELLIS.2。
+- 実行中は GPU を使う。入口ページ（ポート 8080）で、ほかのサービスを止めて ComfyUI に切り替えてから実行する。
+"""
+# グラフ表示で開いたときの初期の位置と縮尺。テンプレートは全体が入る縮尺 0.1 で開くため、画像を置く場所が小さすぎる。
+# 画面の左上に映るグラフ座標は (-offset_x, -offset_y)。縮尺 0.4 なら、横 1700px で約 4250 の幅が見える。
+EASY_VIEW = {"scale": 0.4, "offset": [5900.0, 150.0]}
 
 
 class WorkflowFormatError(ValueError):
@@ -225,6 +246,61 @@ def make_fallback(
     if isinstance(fallback.get("id"), str):
         fallback["id"] = str(uuid.uuid5(_FALLBACK_UUID_NAMESPACE, fallback["id"] + ":noWTiVo"))
     return fallback
+
+
+def _single_node(workflow: dict[str, Any], node_type: str) -> dict[str, Any]:
+    found = [node for node in workflow.get("nodes", []) if node.get("type") == node_type]
+    if len(found) != 1:
+        raise WorkflowFormatError(
+            f"{node_type} がちょうど 1 個あるはずだが {len(found)} 個ある（上流のテンプレートが変わった可能性）"
+        )
+    return found[0]
+
+
+def make_easy_image_to_3d(template: dict[str, Any]) -> dict[str, Any]:
+    """ComfyUI 同梱の「画像 → 3D」テンプレートから、画像を入れて Run を押すだけの入口を作る。
+
+    変えるのは次の 3 点だけで、ノードの結線と値には触れない（実行されるものはテンプレートと同じ）。
+      - アプリモード（extra.linearMode / linearData）にする。入力は LoadImage の image、出力は Save3DAdvanced。
+        グラフ表示に切り替えたときの初期表示は、画像を置く場所に寄せる（EASY_VIEW）。
+      - 手順を書いた MarkdownNote を LoadImage の左上に足す（画面だけのノードで、実行には使われない）。
+      - workflow の id を、テンプレートの id から決まった別の UUID にする。
+    """
+
+    easy = copy.deepcopy(template)
+    load_image = _single_node(easy, LOAD_IMAGE_NODE_TYPE)
+    save_3d = _single_node(easy, SAVE_3D_NODE_TYPE)
+
+    extra = easy.setdefault("extra", {})
+    extra["linearMode"] = True
+    extra["linearData"] = {"inputs": [[load_image["id"], "image"]], "outputs": [save_3d["id"]]}
+    extra["ds"] = copy.deepcopy(EASY_VIEW)
+
+    note_id = max(int(easy.get("last_node_id", 0)), *(int(node["id"]) for node in easy["nodes"])) + 1
+    load_x, load_y = load_image["pos"]
+    easy["nodes"].append(
+        {
+            "id": note_id,
+            "type": MARKDOWN_NOTE_NODE_TYPE,
+            "pos": [load_x - 780, load_y - 570],
+            "size": [660, 500],
+            "flags": {},
+            "order": max(int(node.get("order", 0)) for node in easy["nodes"]) + 1,
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "title": EASY_NOTE_TITLE,
+            "properties": {},
+            "widgets_values": [EASY_NOTE_TEXT],
+            "color": "#222",
+            "bgcolor": "#000",
+        }
+    )
+    easy["last_node_id"] = note_id
+
+    if isinstance(easy.get("id"), str):
+        easy["id"] = str(uuid.uuid5(_EASY_UUID_NAMESPACE, easy["id"]))
+    return easy
 
 
 def dump_workflow(workflow: dict[str, Any]) -> str:
