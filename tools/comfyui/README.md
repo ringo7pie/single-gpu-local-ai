@@ -91,28 +91,45 @@ systemctl --user stop comfyui
 - Ollama（Qwen）と VRAM を分け合う。生成前に `~/.claude/scripts/vram-policy.sh status` で空きを見て、
   足りなければ Qwen を降ろす。Hunyuan3D / Pixal3D とは同時に生成しない。
 
-## 画像 1 枚から 3D（Image_to_3D.json）
+## 画像 1 枚から 3D（Image_to_3D.app.json）
 
 画像を 1 枚入れて Run を押すだけで、テクスチャ付きの 3D モデル（GLB）を作る入口。
 `http://<server-ip>:8188` → 左の Workflows → `Image_to_3D`。
 
 1. **Load Image** で 3D にしたい画像を選ぶ（ドラッグ＆ドロップでもよい）。
-2. **Run** を押す。ほかの設定は触らなくてよい。
-3. **Save 3D** のビューアに結果が出る。GLB はサーバーの `vendor/ComfyUI/output/3d/ComfyUI_*.glb` に保存される。
+2. 必要なら **ポリゴン数** と **テクスチャサイズ** を変える（変えなければ 70 万面・4096px）。
+3. **Run** を押す。
+4. **Save 3D** のビューアに結果が出る。GLB はサーバーの `vendor/ComfyUI/output/3d/ComfyUI_*.glb` に保存される。
+
+| アプリの入力 | 決めるもの | 指定できる値 |
+|---|---|---|
+| ポリゴン数（目標の面数） | `DecimateMesh.target_face_count` | 0〜50,000,000。0 は間引かない。**形を作る段階の面数より増えない**（斧で 3,353,172 面。画像で変わる） |
+| テクスチャサイズ（px） | `UnwrapMesh.resolution` と `BakeTextureFromVoxel.texture_size`（ベースカラー・金属・粗さ。AO も同じ大きさで出る） | 256〜8192 の 256 の倍数（`UnwrapMesh` が 0〜8192・256 刻み。サーバーは刻みを検査しない） |
+
+- 法線マップは 2048px（`BakeNormalMapFromMesh`）、AO の焼き込みは 1024px（`BakeAmbientOcclusion`）のまま、アプリの入力では変わらない。
 
 - 土台は ComfyUI 同梱のテンプレート `3d_pixal3d_trellis2_image_to_model`（comfyui-workflow-templates 0.11.85）。
   Pixal3D（既定）か TRELLIS.2 で形を作り、RemeshMesh → DecimateMesh（70 万面）→ UV 展開 → PBR（ベースカラー・
   金属/粗さ・AO 4096px、法線 2048px）のベイクまで行う。必要な重みは「重みの置き場」の 9 点に含まれ、追加の
   ダウンロードは要らない（`tests/test_units.py` が、テンプレートの要求する重みが `MODEL_FILES` に入っていることを確かめる）。
-- `scripts/adapt_workflows.py`（`setup-server.sh` の [11/12]）が、テンプレートから次の 3 点だけを変えて
-  `vendor/ComfyUI/user/default/workflows/Image_to_3D.json` に書く（`cfui.workflows.make_easy_image_to_3d`）。
-  ノードの結線と値は変えない。
-  - アプリモード（`extra.linearMode` / `linearData`: 入力は LoadImage の `image`、出力は Save 3D）にする。
-    テンプレートは全体が入る縮尺 0.1 で開き、結果を出す Save 3D が入力から約 9,000 単位右にあるため。
+- `scripts/adapt_workflows.py`（`setup-server.sh` の [11/12]）が、テンプレートから次の点だけを変えて
+  `vendor/ComfyUI/user/default/workflows/Image_to_3D.app.json` に書く（`cfui.workflows.make_easy_image_to_3d`）。
+  実行される処理は変えない（既定の値も同じ）。
+  - アプリモード（`extra.linearMode` / `linearData`: 入力は LoadImage の `image`・ポリゴン数・テクスチャサイズの順、
+    出力は Save 3D）にする。テンプレートは全体が入る縮尺 0.1 で開き、結果を出す Save 3D が入力から約 9,000 単位右にあるため。
     グラフ表示に切り替えたときの初期表示は、画像を置く場所に寄せてある。
+  - ポリゴン数の入力用に PrimitiveInt（題名「ポリゴン数（目標の面数）」）を足し、`DecimateMesh.target_face_count` へつなぐ
+    （値は DecimateMesh が持っていた 700000）。テクスチャサイズは上流の PrimitiveInt「Texture Resolution」（4096）を使い、題名を
+    日本語にする。アプリの入力欄にできるのは「ノードの widget」で、DecimateMesh の widget を直接出さないのは、この 2 つを同じ形にして
+    題名で欄の名前が決まるようにするため（欄の名前が画面でどう出るかは未確認）。
   - 手順を書いた MarkdownNote を足す（画面だけのノード）。
   - workflow の id をテンプレートの id から決まった別の UUID にする。
+- ファイル名は `.app.json`。アプリモードのワークフローを画面で保存し直すと、`Image_to_3D.json` がこの名前に変わった（2026-10-25）。
+  画面は `linearData` の項目も `["<workflow id>:<ノード id>:<widget 名>", widget 名]` の書式に直す（旧書式 `[ノード id, widget 名]` は
+  読み込み時にこの書式へ変換される。フロントエンド 1.55.17 の `pruneLinearData` / `upgradeAndValidateInput` を読んで確かめた）。
 - 既に書いたファイルを UI で手直ししていれば上書きしない（`--force` で上書き、`--no-easy` で書かない）。
+  **画面で保存し直したファイルに、入力画像などの手直しを残したまま今の版の変更を当てるには `--upgrade-easy`**
+  （何度流しても同じ結果。書式は indent=2 に変わる。開いている画面は保存し直すと元に戻るので、先に閉じて開き直す）。
 - GPU を使う。ほかのサービス（Hunyuan3D・Pixal3D・Strata）とは同時に動かさない（入口ページから ComfyUI を起動すれば自動で止まる）。
 
 ### 実機試験の結果（2026-10-25、`--free-before`、`run_workflow.py run` で投入）
@@ -127,9 +144,28 @@ systemctl --user stop comfyui
 - 斧の GLB を Blender 5.2.2（CPU）で 2 方向から描画して目で見た。形・ルーン・革巻き・木目が入力と一致し、側面から見ても破綻がない。
   人物は全体の形・肌・下着が入力と一致する。顔は目元の模様が入力と違う（入力は無地）。
 - テンプレートが RemeshMesh / DecimateMesh で使う `DynamicCombo` を `run_workflow.py` が扱えなかったため、対応を足した
-  （下の「画面を使わずにワークフローを通す」）。画面（ブラウザ）での操作は確かめていない。特に **アプリモードの表示**
-  （入力欄と 3D の結果が出ること）は、フロントエンドのコードで 3D の出力の分岐（`Preview3d`）があることと、Save 3D の
-  出力の種類（`3d`）が合うことまでしか確かめていない。表示がおかしいときは、グラフ表示に切り替えて使う。
+  （下の「画面を使わずにワークフローを通す」）。
+
+### ポリゴン数とテクスチャサイズを変えた実機試験（2026-10-25、`--free-before`、`--set 325.value=… --set 288.value=…`）
+
+| 入力 | ポリゴン数 / テクスチャ | 時間 | memory.peak / anon | VRAM のピーク | 結果の GLB |
+|---|---|---|---|---|---|
+| `E_copper_coin.png` | 30,000 / 2048 | 370.8 秒 | 20.4 / 9.8 GiB | 16,412 MiB | 29,796 面・ベースカラー／金属粗さ／AO／法線 すべて 2048px・14.7 MB |
+| `viking_wolf_rune_axe.png` | 50,000,000（間引かない）/ 8192 | 235.9 秒 | 22.8 / 11.6 GiB | 12,572 MiB | 3,353,172 面・ベースカラー／金属粗さ／AO 8192px・法線 2048px・239.7 MB |
+| 同上（更新後の実ファイルを既定値のまま） | 700,000 / 4096 | 167.4 秒 | — | — | 698,096 面（前回 698,185 面）・4096px（法線 2048px） |
+
+- 指定どおりの面数・大きさで出る。面数は指定のほぼ 100%（30,000 に対し 29,796）、既定の 70 万面は前回と 89 面（0.013%）違う
+  （同じ seed でも一致しないので GPU 演算の非決定性と考えられるが、未確認）。
+- 1 つ目が遅いのは設定のせいではない。時間の大半は形を作る前段の KSampler（#23 が 164.9 秒・#12 が 87.4 秒。斧は 47.0 秒・25.3 秒）で、
+  ポリゴン数やテクスチャサイズより前に走る。入力画像（コインは大きく詰まった物体）で変わると考えられる（同じ画像での比較はしていない）。
+- 8192px でも RAM・VRAM は余裕がある（`MemoryMax` 48 GiB、VRAM 24 GiB）。ベイクの 3 ノード（Unwrap 29.4 秒・Bake Texture 30.5 秒・
+  AO 15.4 秒）が増え、GLB が 240 MB になる。
+
+### 画面での確認について
+
+画面（ブラウザ）での操作は確かめていない。利用者が画面でアプリモードを開いて実行した記録（`comfyui.service` のジャーナル）はあるが、
+**アプリモードの表示**（入力欄の名前・ポリゴン数とテクスチャサイズの欄・3D の結果）は私は見ていない。フロントエンドのコードでは、
+3D の出力の分岐（`Preview3d`）があり、Save 3D の出力の種類（`3d`）と合うことまで確かめた。表示がおかしいときは、グラフ表示に切り替えて使う。
 
 ### `qwen_3_4b.safetensors` が無いと言われたら
 

@@ -6,9 +6,11 @@
 使わない。/snap/bin/blender は snap run が comfyui の cgroup の外へ子を移すので使わない）。
 それ以外は変えない。書式は配布元と同じ indent=2・末尾改行なしで、ensure_ascii=False で書く。
 
-そのほかに、画像を 1 枚入れて Run を押すだけの入口 Image_to_3D.json も書く。ComfyUI 同梱のテンプレート
+そのほかに、画像を 1 枚入れて Run を押すだけの入口 Image_to_3D.app.json も書く。ComfyUI 同梱のテンプレート
 （comfyui-workflow-templates の 3d_pixal3d_trellis2_image_to_model.json）を土台に、アプリモードと手順のノートを足す
 （cfui.workflows.make_easy_image_to_3d）。--no-easy で書かない。
+画面で保存し直した Image_to_3D.app.json（手直しがあるので上書きしない）に今の版の変更だけを当てるには --upgrade-easy
+（入力画像などの手直しは残す。何度流しても同じ結果になる）。
 
 --fallback を付けると、予備案の写しも書く（WTiVo を外し、直後の LODTailor の Voxel Remesh を
 relative_voxel_size=1/1536 で使う）。WTiVo を含まない 03 は予備案を作らない。
@@ -77,6 +79,7 @@ _STATUS_LABELS = {
     "migrated": "以前の既定の Blender のパスのままだったので、今の既定値に書き換えました",
     "unchanged": "同じ内容なので触りません",
     "kept": "内容が違うので上書きしません（UI で手直しした可能性。--force で上書き）",
+    "upgraded": "今の版の変更を当てました（手直しした内容は残しています）",
 }
 
 
@@ -145,6 +148,21 @@ def write_easy_workflow(template_path: Path, dest_path: Path, force: bool) -> tu
     return dest_path, write_if_safe(dest_path, dump_workflow(easy), force)
 
 
+def upgrade_easy_workflow(path: Path) -> tuple[Path, str]:
+    """画面で保存し直した入口ワークフローに、今の版の変更（make_easy_image_to_3d）を当てる。
+
+    結果は "upgraded"（書き換えた）か "unchanged"（すでに今の版）。書式は dump_workflow に揃うので、
+    画面が保存した詰めた書式のファイルは、読みやすい書式（indent=2）に変わる。
+    """
+
+    current = json.loads(path.read_text(encoding="utf-8"))
+    upgraded = make_easy_image_to_3d(current)
+    if upgraded == current:
+        return path, "unchanged"
+    path.write_text(dump_workflow(upgraded), encoding="utf-8")
+    return path, "upgraded"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PixelArtistry のワークフローを ComfyUI へ写す")
     parser.add_argument(
@@ -176,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="予備案の LODTailor の relative_voxel_size（既定: 1/1536）",
     )
     parser.add_argument(
-        "--no-easy", action="store_true", help="入口ワークフロー（Image_to_3D.json）を書かない"
+        "--no-easy", action="store_true", help="入口ワークフロー（Image_to_3D.app.json）を書かない"
     )
     parser.add_argument(
         "--easy-template",
@@ -188,7 +206,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--easy-dest",
         type=Path,
         default=config.EASY_WORKFLOW_PATH,
-        help="入口ワークフローの書き出し先（既定: vendor/ComfyUI/user/default/workflows/Image_to_3D.json）",
+        help="入口ワークフローの書き出し先（既定: vendor/ComfyUI/user/default/workflows/Image_to_3D.app.json）",
+    )
+    parser.add_argument(
+        "--upgrade-easy",
+        action="store_true",
+        help="書いてあるファイルは上書きせず、今の版の変更だけを当てる（画面で手直し・保存し直したあとの更新用）",
     )
     parser.add_argument("--force", action="store_true", help="内容が違っても上書きする")
     return parser
@@ -213,10 +236,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_easy:
         return 0
 
+    if args.upgrade_easy:
+        if not args.easy_dest.is_file():
+            print(f"今の版へ直せません: {args.easy_dest} がありません（--upgrade-easy を外して書き出す）", file=sys.stderr)
+            return 1
+        try:
+            path, status = upgrade_easy_workflow(args.easy_dest)
+        except (OSError, json.JSONDecodeError, WorkflowFormatError) as exc:
+            print(f"入口ワークフロー（{args.easy_dest.name}）を直せませんでした: {exc}", file=sys.stderr)
+            return 1
+        print(f"  {path.name}: {_STATUS_LABELS[status]}（{path.parent}）")
+        return 0
+
     template_path = args.easy_template or find_easy_template()
     if template_path is None:
         print(
-            "入口ワークフロー（Image_to_3D.json）を書けませんでした: ComfyUI 同梱のテンプレート"
+            "入口ワークフロー（Image_to_3D.app.json）を書けませんでした: ComfyUI 同梱のテンプレート"
             f"（{config.EASY_TEMPLATE_FILE}）が見つかりません。venv の python で実行してください",
             file=sys.stderr,
         )
@@ -224,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         path, status = write_easy_workflow(template_path, args.easy_dest, args.force)
     except (OSError, json.JSONDecodeError, WorkflowFormatError) as exc:
-        print(f"入口ワークフロー（Image_to_3D.json）を書けませんでした: {exc}", file=sys.stderr)
+        print(f"入口ワークフロー（Image_to_3D.app.json）を書けませんでした: {exc}", file=sys.stderr)
         return 1
     print(f"  {path.name}: {_STATUS_LABELS[status]}（{path.parent}）")
     return 0

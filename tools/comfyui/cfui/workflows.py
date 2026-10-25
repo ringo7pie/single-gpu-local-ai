@@ -57,14 +57,29 @@ _EASY_UUID_NAMESPACE = uuid.UUID("b3a6f0c2-5d1e-4a7b-9c38-0e2d7f4a1b65")
 LOAD_IMAGE_NODE_TYPE = "LoadImage"
 SAVE_3D_NODE_TYPE = "Save3DAdvanced"
 MARKDOWN_NOTE_NODE_TYPE = "MarkdownNote"
+DECIMATE_NODE_TYPE = "DecimateMesh"
+PRIMITIVE_INT_NODE_TYPE = "PrimitiveInt"
+
+# 上流テンプレートで、ベースカラー・金属・粗さの大きさ（UnwrapMesh.resolution と BakeTextureFromVoxel.texture_size）を
+# 1 か所で決めている PrimitiveInt の題名。アプリの入力にするとき、日本語の題名に直す。
+TEXTURE_SIZE_UPSTREAM_TITLE = "Texture Resolution"
+TEXTURE_SIZE_TITLE = "テクスチャサイズ（px）"
+# DecimateMesh.target_face_count へつなぐ PrimitiveInt（足すノード）の題名。アプリの入力欄の名前になる。
+POLYGON_COUNT_TITLE = "ポリゴン数（目標の面数）"
+DECIMATE_INPUT_NAME = "target_face_count"
 
 EASY_NOTE_TITLE = "使い方（画像 1 枚から 3D）"
 EASY_NOTE_TEXT = """## 画像 1 枚から 3D モデルを作る
 
 1. **Load Image** で、3D にしたい画像を選ぶ（「Upload Input Image Here」の枠。ドラッグ＆ドロップでもよい）。
-2. **実行（Run）** を押す。ほかの設定は触らなくてよい。
-3. 終わると **Save 3D** のビューアに 3D モデルが出る。GLB は ComfyUI の `output/3d/` に保存される。
+2. 必要なら **ポリゴン数** と **テクスチャサイズ** を変える（変えなければ 70 万面・4096px）。
+3. **実行（Run）** を押す。
+4. 終わると **Save 3D** のビューアに 3D モデルが出る。GLB は ComfyUI の `output/3d/` に保存される。
 
+- ポリゴン数: 目標の面数。形を作る段階の面数（斧の例で約 335 万面。画像で変わる）より増えない。
+  0 は間引かない。少ないほど軽く、多いほど細かい（約 3 万面〜335 万面で確認）。
+- テクスチャサイズ: ベースカラー・金属・粗さの大きさ。256〜8192 の 256 の倍数（1024 / 2048 / 4096 / 8192 など）。
+  法線マップは 2048px、AO は 1024px のまま変わらない。
 - 1 つの物体が大きく写った画像が向く。背景は自動で取り除く。
 - 「Switch Model Here」のスイッチ: false = Pixal3D（既定）、true = TRELLIS.2。
 - 実行中は GPU を使う。入口ページ（ポート 8080）で、ほかのサービスを止めて ComfyUI に切り替えてから実行する。
@@ -257,49 +272,190 @@ def _single_node(workflow: dict[str, Any], node_type: str) -> dict[str, Any]:
     return found[0]
 
 
-def make_easy_image_to_3d(template: dict[str, Any]) -> dict[str, Any]:
-    """ComfyUI 同梱の「画像 → 3D」テンプレートから、画像を入れて Run を押すだけの入口を作る。
+def _single_titled_node(workflow: dict[str, Any], node_type: str, titles: tuple[str, ...]) -> dict[str, Any] | None:
+    """型が node_type で題名が titles のどれかのノード。無ければ None、2 個以上あれば WorkflowFormatError。"""
 
-    変えるのは次の 3 点だけで、ノードの結線と値には触れない（実行されるものはテンプレートと同じ）。
-      - アプリモード（extra.linearMode / linearData）にする。入力は LoadImage の image、出力は Save3DAdvanced。
-        グラフ表示に切り替えたときの初期表示は、画像を置く場所に寄せる（EASY_VIEW）。
-      - 手順を書いた MarkdownNote を LoadImage の左上に足す（画面だけのノードで、実行には使われない）。
-      - workflow の id を、テンプレートの id から決まった別の UUID にする。
+    found = [
+        node for node in workflow.get("nodes", []) if node.get("type") == node_type and node.get("title") in titles
+    ]
+    if len(found) > 1:
+        raise WorkflowFormatError(f"{node_type}「{titles[0]}」が {len(found)} 個ある")
+    return found[0] if found else None
+
+
+def _next_node_id(workflow: dict[str, Any]) -> int:
+    return max(int(workflow.get("last_node_id", 0)), *(int(node["id"]) for node in workflow["nodes"])) + 1
+
+
+def _next_order(workflow: dict[str, Any]) -> int:
+    return max(int(node.get("order", 0)) for node in workflow["nodes"]) + 1
+
+
+def _ensure_polygon_count_control(workflow: dict[str, Any], texture_size: dict[str, Any]) -> dict[str, Any]:
+    """DecimateMesh.target_face_count へつなぐ PrimitiveInt（題名 POLYGON_COUNT_TITLE）を返す。無ければ足す。
+
+    アプリの入力欄にできるのは「ノードの widget」なので、DecimateMesh の widget を直接出さず、
+    テクスチャサイズ（上流が PrimitiveInt で持つ）と同じ形の PrimitiveInt を 1 つ足して結ぶ。
+    足すノードは texture_size の写しにして、画面の保存形式（localized_name など）をそのまま引き継ぐ。
+    値は DecimateMesh が持っていた値（既定 700000）。DecimateMesh の widget の値は、つながっている間は使われない。
     """
 
-    easy = copy.deepcopy(template)
+    decimate = _single_node(workflow, DECIMATE_NODE_TYPE)
+    existing = _single_titled_node(workflow, PRIMITIVE_INT_NODE_TYPE, (POLYGON_COUNT_TITLE,))
+    decimate_input = next((item for item in decimate.get("inputs", []) if item.get("name") == DECIMATE_INPUT_NAME), None)
+
+    if existing is not None:
+        linked = decimate_input is not None and decimate_input.get("link") is not None
+        if not linked:
+            raise WorkflowFormatError(f"「{POLYGON_COUNT_TITLE}」はあるが、DecimateMesh.{DECIMATE_INPUT_NAME} につながっていない")
+        return existing
+    if decimate_input is not None and decimate_input.get("link") is not None:
+        raise WorkflowFormatError(
+            f"DecimateMesh.{DECIMATE_INPUT_NAME} がすでに別のノードにつながっている（上流のテンプレートが変わった可能性）"
+        )
+
+    widgets = decimate.get("widgets_values") or []
+    if not widgets or not isinstance(widgets[0], int):
+        raise WorkflowFormatError(f"DecimateMesh の widgets_values の先頭が {DECIMATE_INPUT_NAME} の整数ではない: {widgets!r}")
+    polygon_count = widgets[0]
+
+    node_id = _next_node_id(workflow)
+    link_id = int(workflow.get("last_link_id", 0)) + 1
+    control = copy.deepcopy(texture_size)
+    control["id"] = node_id
+    control["title"] = POLYGON_COUNT_TITLE
+    control["order"] = _next_order(workflow)
+    control["pos"] = [decimate["pos"][0], decimate["pos"][1] - 120]
+    control["widgets_values"] = [polygon_count, *control.get("widgets_values", [None, "fixed"])[1:]]
+    if "widgets_values_named" in control:
+        control["widgets_values_named"] = {**control["widgets_values_named"], "value": polygon_count}
+    control["outputs"] = [{**output, "links": [link_id]} for output in control.get("outputs", [])]
+    if len(control["outputs"]) != 1:
+        raise WorkflowFormatError("PrimitiveInt の出力が 1 つではない")
+    for item in control.get("inputs", []):
+        item["link"] = None
+
+    if decimate_input is None:
+        decimate_input = {"name": DECIMATE_INPUT_NAME, "type": "INT", "widget": {"name": DECIMATE_INPUT_NAME}}
+        decimate.setdefault("inputs", []).append(decimate_input)
+    decimate_input["link"] = link_id
+    target_slot = decimate["inputs"].index(decimate_input)
+
+    workflow["nodes"].append(control)
+    workflow.setdefault("links", []).append([link_id, node_id, 0, decimate["id"], target_slot, "INT"])
+    workflow["last_node_id"] = node_id
+    workflow["last_link_id"] = link_id
+    return control
+
+
+def _linear_entry_node_id(entry: Any) -> int | None:
+    """linearData.inputs の 1 項目が指すノードの id。形は 2 つある。
+
+    旧書式 [ノード id, widget 名] と、画面が保存し直すと変える ["<workflow id>:<ノード id>:<widget 名>", widget 名]。
+    """
+
+    head = entry[0] if isinstance(entry, (list, tuple)) and entry else None
+    if isinstance(head, int):
+        return head
+    if isinstance(head, str):
+        parts = head.split(":")
+        candidate = parts[1] if len(parts) == 3 else head
+        return int(candidate) if candidate.isdigit() else None
+    return None
+
+
+def _set_linear_data(workflow: dict[str, Any], wanted: list[tuple[int, str]], outputs: list[int]) -> None:
+    """アプリの入力欄を wanted の順にし、出力に outputs を含める。すでにある項目は書式ごとそのまま残す。"""
+
+    extra = workflow.setdefault("extra", {})
+    linear = extra.setdefault("linearData", {})
+    existing = linear.get("inputs") or []
+    # 画面が保存し直した書式（widget id の文字列）が 1 つでもあれば、足す項目も同じ書式にする
+    upgraded = any(isinstance(item[0], str) and ":" in item[0] for item in existing if item)
+    by_node = {node_id: item for item in existing if (node_id := _linear_entry_node_id(item)) is not None}
+
+    inputs = []
+    for node_id, widget_name in wanted:
+        if node_id in by_node:
+            inputs.append(by_node[node_id])
+        elif upgraded and isinstance(workflow.get("id"), str):
+            inputs.append([f"{workflow['id']}:{node_id}:{widget_name}", widget_name])
+        else:
+            inputs.append([node_id, widget_name])
+    linear["inputs"] = inputs
+
+    current_outputs = list(linear.get("outputs") or [])
+    known = {str(item) for item in current_outputs}
+    linear["outputs"] = current_outputs + [node_id for node_id in outputs if str(node_id) not in known]
+
+
+def make_easy_image_to_3d(workflow: dict[str, Any]) -> dict[str, Any]:
+    """ComfyUI 同梱の「画像 → 3D」テンプレートから、画像を入れて Run を押すだけの入口を作る。
+
+    テンプレートでも、すでにこの関数で作って画面で保存し直したものでも渡せる（何度適用しても同じ結果になる）。
+    変えるのは次の点だけで、実行される処理（結線と値）はテンプレートと同じ。
+      - アプリモード（extra.linearMode / linearData）にする。入力は「LoadImage の image・ポリゴン数・テクスチャサイズ」の順、
+        出力は Save3DAdvanced。linearMode はまだ無いときだけ真にする（画面でグラフ表示に戻した選択を変えない）。
+      - ポリゴン数の入力用に PrimitiveInt を足して DecimateMesh.target_face_count につなぐ（_ensure_polygon_count_control）。
+        テクスチャサイズの PrimitiveInt は題名を日本語にする。
+      - 手順を書いた MarkdownNote を LoadImage の左上に足す（画面だけのノードで、実行には使われない）。すでにあれば文面を直す。
+      - テンプレートのときだけ、グラフ表示の初期表示を画像を置く場所へ寄せ（EASY_VIEW）、workflow の id を
+        テンプレートの id から決まった別の UUID にする。
+    """
+
+    easy = copy.deepcopy(workflow)
     load_image = _single_node(easy, LOAD_IMAGE_NODE_TYPE)
     save_3d = _single_node(easy, SAVE_3D_NODE_TYPE)
+    texture_size = _single_titled_node(
+        easy, PRIMITIVE_INT_NODE_TYPE, (TEXTURE_SIZE_UPSTREAM_TITLE, TEXTURE_SIZE_TITLE)
+    )
+    if texture_size is None:
+        raise WorkflowFormatError(
+            f"PrimitiveInt「{TEXTURE_SIZE_UPSTREAM_TITLE}」が無い（上流のテンプレートが変わった可能性）"
+        )
+
+    note = _single_titled_node(easy, MARKDOWN_NOTE_NODE_TYPE, (EASY_NOTE_TITLE,))
+    already_easy = note is not None
+
+    polygon_count = _ensure_polygon_count_control(easy, texture_size)
+    texture_size["title"] = TEXTURE_SIZE_TITLE
 
     extra = easy.setdefault("extra", {})
-    extra["linearMode"] = True
-    extra["linearData"] = {"inputs": [[load_image["id"], "image"]], "outputs": [save_3d["id"]]}
-    extra["ds"] = copy.deepcopy(EASY_VIEW)
-
-    note_id = max(int(easy.get("last_node_id", 0)), *(int(node["id"]) for node in easy["nodes"])) + 1
-    load_x, load_y = load_image["pos"]
-    easy["nodes"].append(
-        {
-            "id": note_id,
-            "type": MARKDOWN_NOTE_NODE_TYPE,
-            "pos": [load_x - 780, load_y - 570],
-            "size": [660, 500],
-            "flags": {},
-            "order": max(int(node.get("order", 0)) for node in easy["nodes"]) + 1,
-            "mode": 0,
-            "inputs": [],
-            "outputs": [],
-            "title": EASY_NOTE_TITLE,
-            "properties": {},
-            "widgets_values": [EASY_NOTE_TEXT],
-            "color": "#222",
-            "bgcolor": "#000",
-        }
+    extra.setdefault("linearMode", True)
+    _set_linear_data(
+        easy,
+        [(load_image["id"], "image"), (polygon_count["id"], "value"), (texture_size["id"], "value")],
+        [save_3d["id"]],
     )
-    easy["last_node_id"] = note_id
 
-    if isinstance(easy.get("id"), str):
-        easy["id"] = str(uuid.uuid5(_EASY_UUID_NAMESPACE, easy["id"]))
+    if note is None:
+        load_x, load_y = load_image["pos"]
+        easy["nodes"].append(
+            {
+                "id": _next_node_id(easy),
+                "type": MARKDOWN_NOTE_NODE_TYPE,
+                "pos": [load_x - 780, load_y - 570],
+                "size": [660, 500],
+                "flags": {},
+                "order": _next_order(easy),
+                "mode": 0,
+                "inputs": [],
+                "outputs": [],
+                "title": EASY_NOTE_TITLE,
+                "properties": {},
+                "widgets_values": [EASY_NOTE_TEXT],
+                "color": "#222",
+                "bgcolor": "#000",
+            }
+        )
+        easy["last_node_id"] = easy["nodes"][-1]["id"]
+    else:
+        note["widgets_values"] = [EASY_NOTE_TEXT]
+
+    if not already_easy:
+        extra["ds"] = copy.deepcopy(EASY_VIEW)
+        if isinstance(easy.get("id"), str):
+            easy["id"] = str(uuid.uuid5(_EASY_UUID_NAMESPACE, easy["id"]))
     return easy
 
 
