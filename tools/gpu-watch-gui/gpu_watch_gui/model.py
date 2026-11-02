@@ -9,6 +9,7 @@ raw 行の書式は tools/gpu-watch.sh の feeder() 内の printf と対応し�
   HOST, stamp, cpu%, ctemp, mem%, mem_used_mib, mem_total_mib, cpu_w, psys_w
   FAN,  stamp, pwm, mode, state(ok|stale|none), age_sec
   GPU,  stamp, index, name, temp, util, mem_used_mib, mem_total_mib, power_w
+  TAPO, stamp, power_w   （gpu-watch.sh ではなく tapo_power.py --raw が出す。PC 全体の実測。取れなければ na）
 """
 from __future__ import annotations
 
@@ -31,6 +32,10 @@ LOAD_WARNING = 70.0
 # 電源ユニットの実測効率は不明なため、80 PLUS Gold 帯の代表値として仮に置く仮定値。
 # 実測した値があれば --psu-efficiency で上書きする。
 DEFAULT_PSU_EFFICIENCY = 0.90
+
+# Tapo の実測を「いまの値」として出してよい最大の古さ（秒）。読み取り間隔は 5 秒なので 4 回分。
+# これより古くなったら実測は出さず、推定に戻す（古い数字を現在値として見せない）。
+TAPO_STALE_SEC = 20.0
 
 
 def parse_scalar(text: str) -> Optional[float]:
@@ -111,7 +116,13 @@ class GpuSample:
     power_w: Optional[float]
 
 
-ParsedSample = Union[InfoSample, HostSample, FanSample, GpuSample]
+@dataclass
+class TapoSample:
+    stamp: str
+    power_w: Optional[float]
+
+
+ParsedSample = Union[InfoSample, HostSample, FanSample, GpuSample, TapoSample]
 
 
 def parse_raw_line(line: str) -> Optional[ParsedSample]:
@@ -146,6 +157,8 @@ def parse_raw_line(line: str) -> Optional[ParsedSample]:
             state=fields[4],
             age_sec=parse_scalar(fields[5]),
         )
+    if kind == "TAPO" and len(fields) >= 3:
+        return TapoSample(stamp=fields[1], power_w=parse_scalar(fields[2]))
     if kind == "GPU" and len(fields) >= 9:
         return GpuSample(
             stamp=fields[1],
@@ -439,6 +452,8 @@ class HostState:
     mem_pct: RollingWindow
     cpu_w: RollingWindow
     psys_w: RollingWindow
+    # PC 全体の実測（Tapo。コンセント側の電力）。取れない・古いときは推定に戻すので、受信時刻も持つ。
+    system_w: RollingWindow
     # CPU 電力・PSys 電力・PC 全体の「推定」側の窓（実測と別に持つ。実測が取れる環境では
     # app.py 側が実測を優先表示するが、推定も裏では計算し続け 60 秒最大を出せるようにする）。
     cpu_w_est: RollingWindow
@@ -453,6 +468,8 @@ class HostState:
     cpu_w_est_now: Optional[float] = None
     psys_w_est_now: Optional[float] = None
     system_w_est_now: Optional[float] = None
+    system_w_now: Optional[float] = None
+    system_w_at: Optional[float] = None  # 最後に「値が取れた」サンプルを受け取った時刻（na では更新しない）
     mem_used_mib: Optional[float] = None
     mem_total_mib: Optional[float] = None
     stamp: Optional[str] = None
@@ -505,6 +522,7 @@ class GpuWatchModel:
             mem_pct=RollingWindow(window_sec),
             cpu_w=RollingWindow(window_sec),
             psys_w=RollingWindow(window_sec),
+            system_w=RollingWindow(window_sec),
             cpu_w_est=RollingWindow(window_sec),
             psys_w_est=RollingWindow(window_sec),
             system_w_est=RollingWindow(window_sec),
@@ -576,6 +594,15 @@ class GpuWatchModel:
             self._update_power_estimate(now)
             return self._alerts.update("CPU", record.cpu_temp, self.cpu_threshold)
 
+        if isinstance(record, TapoSample):
+            # last_update は更新しない（gpu-watch.sh の受信を待つ表示に影響させない）
+            # na では「最後に取れた値」を消さない。古くなったかどうかは measured_system_w が時刻で判断する。
+            self.host.system_w.add(now, record.power_w)
+            if record.power_w is not None:
+                self.host.system_w_now = record.power_w
+                self.host.system_w_at = now
+            return None
+
         if isinstance(record, FanSample):
             self.fan.stamp = record.stamp
             self.fan.pwm.add(now, record.pwm)
@@ -602,6 +629,18 @@ class GpuWatchModel:
             return self._alerts.update(record.index, record.temp, self.gpu_threshold)
 
         return None
+
+    def measured_system_w(self, now: Optional[float] = None) -> Optional[float]:
+        """PC 全体の実測（Tapo）。最後に値が取れてから TAPO_STALE_SEC 秒以内のときだけ返す。
+        na が続いた・読み取りが止まった場合は None（呼び出し側が推定に戻す）。"""
+        if now is None:
+            now = time.time()
+        host = self.host
+        if host.system_w_now is None or host.system_w_at is None:
+            return None
+        if now - host.system_w_at > TAPO_STALE_SEC:
+            return None
+        return host.system_w_now
 
     def _gpu_power_total(self) -> Optional[float]:
         """GPU 電力の合計（実測）。1 基でも n/a なら合計も n/a（推測で埋めない）。

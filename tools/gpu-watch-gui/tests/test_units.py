@@ -7,6 +7,7 @@ GTK は import しない（model.py が GTK 非依存であることの確認も
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ CALIBRATE_SCRIPT = GUI_DIR / "calibrate-power.py"
 
 sys.path.insert(0, str(GUI_DIR))
 
-from gpu_watch_gui import model  # noqa: E402  (sys.path 設定の後に import する)
+from gpu_watch_gui import fan_offset, model, tapo_feed  # noqa: E402  (sys.path 設定の後に import する)
 
 
 def _load_calibrate_power_module():
@@ -34,6 +35,20 @@ def _load_calibrate_power_module():
 
 
 calibrate_power = _load_calibrate_power_module()
+
+TAPO_POWER_SCRIPT = GUI_DIR / "tapo_power.py"
+
+
+def _load_tapo_power_module():
+    """tapo_power.py は `tapo`（専用 venv にだけ入っている）を関数の中で import するので、
+    システムの python でもモジュールとして読める（純関数だけを試験する）。"""
+    spec = importlib.util.spec_from_file_location("tapo_power", TAPO_POWER_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tapo_power = _load_tapo_power_module()
 
 
 # ---------------------------------------------------------------------------
@@ -597,5 +612,268 @@ def test_calibrate_power_requires_root():
     assert "root" in result.stderr
 
 
+# ---------------------------------------------------------------------------
+# fan_offset（A30 ファン補正値を fan_host.py へ渡すファイル）
+# ---------------------------------------------------------------------------
+
+# 同じ文字列が SettingThisMachine/FanControl/electronic-circuit/a30_pico_ubuntu/tests/test_logic.py にもある。
+# 2 つのリポジトリが共有するのはこのファイル形式だけなので、変えるときは両方を直す。
+SHARED_OFFSET_JSON = '{"version": 1, "offset": -10, "updated": 1761830000.5}'
+
+
+def test_fan_offset_clamp_offset_limits_and_rounds():
+    assert [fan_offset.clamp_offset(value) for value in (0, 50, 51, -50, -51, 12.6, -0.4, 1e9, -1e9)] == \
+           [0, 50, 50, -50, -50, 13, 0, 50, -50]
+
+
+def test_fan_offset_payload_matches_shared_sample():
+    assert fan_offset.build_payload(-10, 1761830000.5) == json.loads(SHARED_OFFSET_JSON)
+
+
+def test_fan_offset_write_produces_shared_sample(tmp_path):
+    path = tmp_path / "offset.json"
+    fan_offset.write_offset(path, -10, 1761830000.5)
+    assert json.loads(path.read_text(encoding="utf-8")) == json.loads(SHARED_OFFSET_JSON)
+
+
+def test_fan_offset_write_clamps_out_of_range_value(tmp_path):
+    path = tmp_path / "offset.json"
+    fan_offset.write_offset(path, 999, 1000.0)
+    assert json.loads(path.read_text(encoding="utf-8"))["offset"] == 50
+
+
+def test_fan_offset_write_overwrites_and_leaves_no_temporary_file(tmp_path):
+    path = tmp_path / "offset.json"
+    fan_offset.write_offset(path, 10, 1000.0)
+    fan_offset.write_offset(path, -20, 1001.0)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 1, "offset": -20, "updated": 1001.0}
+    assert [entry.name for entry in tmp_path.iterdir()] == ["offset.json"]
+
+
+def test_fan_offset_write_creates_private_directory_and_file(tmp_path):
+    path = tmp_path / "a30-fan" / "offset.json"
+    fan_offset.write_offset(path, 5, 1000.0)
+    assert (path.parent.stat().st_mode & 0o777) == 0o700
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_fan_offset_write_failure_raises_oserror_and_cleans_up(tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(OSError):
+        fan_offset.write_offset(blocker / "offset.json", 5, 1000.0)
+    assert [entry.name for entry in tmp_path.iterdir()] == ["not-a-directory"]
+
+
+def test_fan_offset_clear_removes_file_and_tolerates_missing(tmp_path):
+    path = tmp_path / "offset.json"
+    fan_offset.write_offset(path, 5, 1000.0)
+    fan_offset.clear_offset(path)
+    assert not path.exists()
+    fan_offset.clear_offset(path)  # 既に無くても例外にしない
+    fan_offset.clear_offset(tmp_path / "missing-dir" / "offset.json")
+
+
+def test_fan_offset_default_path_is_under_home_state_dir():
+    assert fan_offset.DEFAULT_PATH == Path.home() / ".local" / "state" / "a30-fan" / "offset.json"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# Tapo（PC 全体の実測）: TAPO 行の解析・鮮度・読み取り役の資格情報の扱い
+# ---------------------------------------------------------------------------
+
+
+def test_parse_raw_line_tapo():
+    sample = model.parse_raw_line("TAPO, 2026/11/01 19:50:12.345, 196.4")
+    assert isinstance(sample, model.TapoSample)
+    assert sample.stamp == "2026/11/01 19:50:12.345"
+    assert sample.power_w == pytest.approx(196.4)
+
+
+def test_parse_raw_line_tapo_na_and_short_line():
+    assert model.parse_raw_line("TAPO, 2026/11/01 19:50:12.345, na").power_w is None
+    assert model.parse_raw_line("TAPO, 2026/11/01 19:50:12.345") is None
+
+
+def test_measured_system_w_is_none_before_any_sample():
+    assert model.GpuWatchModel().measured_system_w(now=1000.0) is None
+
+
+def test_measured_system_w_returns_fresh_value_and_window_max():
+    gpu_model = model.GpuWatchModel(window_sec=60.0)
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:00.000, 180.0", now=1000.0)
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:05.000, 196.4", now=1005.0)
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:10.000, 190.0", now=1010.0)
+    assert gpu_model.measured_system_w(now=1011.0) == pytest.approx(190.0)
+    assert gpu_model.host.system_w.max() == pytest.approx(196.4)
+
+
+def test_measured_system_w_goes_stale_and_falls_back():
+    gpu_model = model.GpuWatchModel()
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:00.000, 190.0", now=1000.0)
+    assert gpu_model.measured_system_w(now=1000.0 + model.TAPO_STALE_SEC) == pytest.approx(190.0)
+    assert gpu_model.measured_system_w(now=1000.0 + model.TAPO_STALE_SEC + 0.1) is None
+
+
+def test_measured_system_w_na_keeps_last_value_but_does_not_refresh_age():
+    gpu_model = model.GpuWatchModel()
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:00.000, 190.0", now=1000.0)
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:05.000, na", now=1005.0)
+    assert gpu_model.measured_system_w(now=1006.0) == pytest.approx(190.0)
+    # na は鮮度を延ばさない。最後に値が取れてから 20 秒を過ぎれば、na が続いていても出さない
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:25.000, na", now=1025.0)
+    assert gpu_model.measured_system_w(now=1026.0) is None
+
+
+def test_tapo_line_does_not_count_as_gpu_watch_update():
+    gpu_model = model.GpuWatchModel()
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:00.000, 190.0", now=1000.0)
+    assert gpu_model.last_update is None  # 「値の受信待ち」の表示を、Tapo の行で解除しない
+
+
+def test_tapo_does_not_change_estimate_values():
+    gpu_model = model.GpuWatchModel()
+    gpu_model.feed_line("TAPO, 2026/11/01 19:50:00.000, 190.0", now=1000.0)
+    assert gpu_model.host.system_w_est_now is None
+
+
+# --- tapo_power.py（読み取り役。tapo 本体が無くても試験できる部分）---------------
+
+
+def test_tapo_power_parse_credentials_line():
+    host, username, password = tapo_power.parse_credentials_line(
+        json.dumps({"host": " 192.168.8.128 ", "username": "a@example.com", "password": "pw"})
+    )
+    assert (host, username, password) == ("192.168.8.128", "a@example.com", "pw")
+
+
+@pytest.mark.parametrize("payload", [
+    {"username": "a@example.com", "password": "pw"},
+    {"host": "192.168.8.128", "password": "pw"},
+    {"host": "192.168.8.128", "username": "a@example.com"},
+    {"host": "192.168.8.128", "username": "", "password": ""},
+])
+def test_tapo_power_parse_credentials_rejects_missing_fields(payload):
+    with pytest.raises(tapo_power.CredentialsError):
+        tapo_power.parse_credentials_line(json.dumps(payload))
+
+
+def test_tapo_power_parse_credentials_rejects_broken_json_without_echoing_it():
+    with pytest.raises(tapo_power.CredentialsError) as caught:
+        tapo_power.parse_credentials_line('{"password": "secret-value"')
+    assert "secret-value" not in str(caught.value)  # エラー文に入力（パスワード）を載せない
+
+
+def test_tapo_power_parse_credentials_rejects_non_object():
+    with pytest.raises(tapo_power.CredentialsError):
+        tapo_power.parse_credentials_line('["a", "b"]')
+
+
+def test_tapo_feed_encode_and_tapo_power_parse_round_trip_with_awkward_password():
+    password = 'p"a\\ss\'w0rd=,日本語 ;$(x)'
+    encoded = tapo_feed.encode_credentials("192.168.8.128", "a@example.com", password)
+    assert encoded.endswith(b"\n") and encoded.count(b"\n") == 1  # 1 行（readline で読める）
+    assert tapo_power.parse_credentials_line(encoded.decode("utf-8")) == ("192.168.8.128", "a@example.com", password)
+
+
+def test_tapo_power_read_credentials_from_non_tty_stdin():
+    import io
+    stream = io.StringIO(json.dumps({"host": "192.168.8.128", "username": "u", "password": "p"}) + "\n")
+    assert tapo_power.read_credentials(stream, default_host="") == ("192.168.8.128", "u", "p")
+    stream = io.StringIO(json.dumps({"host": "192.168.8.128", "username": "u", "password": "p"}) + "\n")
+    assert tapo_power.read_credentials(stream, default_host="192.168.8.200")[0] == "192.168.8.200"
+
+
+def test_tapo_power_read_credentials_empty_stdin_raises():
+    import io
+    with pytest.raises(tapo_power.CredentialsError):
+        tapo_power.read_credentials(io.StringIO(""), default_host="")
+
+
+def test_tapo_power_format_raw_line():
+    import datetime
+    moment = datetime.datetime(2026, 11, 1, 19, 50, 12, 345678)
+    assert tapo_power.format_raw_line(moment, 196.44) == "TAPO, 2026/11/01 19:50:12.345, 196.4"
+    assert tapo_power.format_raw_line(moment, None) == "TAPO, 2026/11/01 19:50:12.345, na"
+    # GUI の解析と対になっている（書式を変えたら両方が壊れる）
+    assert model.parse_raw_line(tapo_power.format_raw_line(moment, 196.44)).power_w == pytest.approx(196.4)
+
+
+def test_tapo_power_exit_codes_match_gui_side():
+    assert tapo_power.EXIT_BAD_CREDENTIALS == tapo_feed.EXIT_BAD_CREDENTIALS
+    assert tapo_power.EXIT_FIRST_READ_FAILED == tapo_feed.EXIT_FIRST_READ_FAILED
+
+
+@pytest.mark.parametrize("stdin_text", ["", "not json\n", '{"host": "192.168.8.128"}\n'])
+def test_tapo_power_script_exits_3_on_bad_stdin(stdin_text):
+    result = subprocess.run(
+        ["/usr/bin/python3", "-I", str(TAPO_POWER_SCRIPT), "--raw"],
+        input=stdin_text, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == tapo_power.EXIT_BAD_CREDENTIALS
+    assert result.stdout == ""
+
+
+def test_tapo_power_script_rejects_too_short_interval():
+    result = subprocess.run(
+        ["/usr/bin/python3", "-I", str(TAPO_POWER_SCRIPT), "--raw", "--interval", "1"],
+        input="", capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 2
+
+
+# --- tapo_feed.py（GUI 側。GTK 非依存）--------------------------------------------
+
+
+def test_tapo_feed_validate_host():
+    assert tapo_feed.validate_host(" 192.168.8.128 ") == (True, "192.168.8.128")
+    for bad in ("", "tapo.local", "http://192.168.8.128", "192.168.8", "192.168.8.300"):
+        ok, problem = tapo_feed.validate_host(bad)
+        assert ok is False and problem
+
+
+def test_tapo_feed_profile_round_trip_without_password(tmp_path):
+    profile_path = tmp_path / "state" / "tapo.json"
+    tapo_feed.save_profile("192.168.8.128", "a@example.com", path=profile_path)
+    assert tapo_feed.load_profile(profile_path) == {"host": "192.168.8.128", "username": "a@example.com"}
+    assert (profile_path.stat().st_mode & 0o777) == 0o600
+    assert "password" not in profile_path.read_text(encoding="utf-8").lower()
+    assert not list(profile_path.parent.glob("*.tmp"))
+
+
+def test_tapo_feed_save_profile_cannot_take_a_password():
+    import inspect
+    assert "password" not in inspect.signature(tapo_feed.save_profile).parameters
+
+
+def test_tapo_feed_load_profile_missing_or_broken_gives_blanks(tmp_path):
+    blank = {"host": "", "username": ""}
+    assert tapo_feed.load_profile(tmp_path / "none.json") == blank
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert tapo_feed.load_profile(broken) == blank
+    listy = tmp_path / "list.json"
+    listy.write_text("[1, 2]", encoding="utf-8")
+    assert tapo_feed.load_profile(listy) == blank
+
+
+def test_tapo_feed_build_argv_is_isolated_and_has_no_secrets():
+    argv = tapo_feed.build_argv(Path("/venv/bin/python"), 5.0)
+    assert argv[:3] == ["/venv/bin/python", "-I", str(tapo_feed.READER_SCRIPT)]
+    assert argv[3:] == ["--raw", "--interval", "5"]
+
+
+def test_tapo_feed_classify_exit():
+    assert tapo_feed.classify_exit(3) == "ask_again"
+    assert tapo_feed.classify_exit(4) == "ask_again"
+    for code in (0, 1, 2, -1, 137, 143):
+        assert tapo_feed.classify_exit(code) == "retry"
+
+
+def test_tapo_feed_reader_available_reports_missing_venv(tmp_path):
+    available, reason = tapo_feed.reader_available(tmp_path / "no" / "python")
+    assert available is False and "setup-tapo.sh" in reason
