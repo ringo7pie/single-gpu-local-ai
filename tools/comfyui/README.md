@@ -14,6 +14,8 @@
 - 8080: 入口ページ（`tools/portal`）
 
 サーバー IP は `<server-ip>`（例: 192.168.1.10）。起動後は `http://<server-ip>:8188` → 左の Workflows → `Image_to_3D`（画像 1 枚から 3D。下の「画像 1 枚から 3D」）か `PixelArtistry`（防水メッシュ）。
+`PixelArtistry` の 4 本は、開くと画像の置き場（Load Image）の真上に緑の日本語ノート「使い方（日本語・この機体）」があり、
+手順・この機体での前提・実測の目安を書いている（下の「ワークフローの写し方」）。
 
 ## 固定している版
 
@@ -283,15 +285,62 @@ tools/comfyui/.venv/bin/python tools/comfyui/scripts/adapt_workflows.py --fallba
 ## ワークフローの写し方
 
 `scripts/adapt_workflows.py` は配布元の `workflows/*.json` を `vendor/ComfyUI/user/default/workflows/PixelArtistry/` に写す。
-変えるのは紫の「Blender path」ノード（`PrimitiveString`、既定値 `"blender"`）の値だけで、`/snap/blender/current/blender` にする。
+変えるのは次の 4 点だけで、ほかのノードの結線と値は配布元のまま（`tests/test_units.py` が実物で確かめる）。
+
+| 変更 | 対象 | 内容 |
+|---|---|---|
+| Blender のパス | 4 本 | 紫の「Blender path」ノード（`PrimitiveString`、既定値 `"blender"`）を `/snap/blender/current/blender` にする |
+| 日本語の手順ノート | 4 本 | 題名「使い方（日本語・この機体）」の MarkdownNote（緑）を、「Upload Input Image Here」グループの真上（`pos=(-5090, -240)`・`size=(770, 660)`）に足す。本文は `cfui/notes_ja.py` |
+| 開いたときの初期表示 | 4 本 | `extra.ds` を縮尺 0.5・`offset=(5250, 300)` にする（日本語ノート・Load Image・前処理が映る）。配布元は全体が入る縮尺 0.1 で、文字が読めない |
+| WTiVo の `proxy_points` | 01b だけ | 25,000,000 を `cfui/config.py` の `WTIVO_2K_PROXY_POINTS` に下げ、題名の「25M」も同じ値にする（下の「2K（01b）をこの機体で通す設定」）。`--proxy-points-2k N` で変える。`0` で配布元のまま |
+
+- 英語のノート（Start here・Settings）は配布元のまま残す。01b の英語のノートの「25M」は配布元の値。
+- 日本語ノートの見え方と初期表示は、ブラウザが無いので目で確かめていない（置き場所は座標で、既存のノード・グループと
+  重ならないことを試験で確かめている）。
+- 予備案（`--fallback`）は Blender のパスだけを変えた写しから作り、日本語ノートも 2K の変更も当てない。
+
 書式は配布元と同じ `indent=2`・末尾改行なし（配布元は `json.dumps(indent=2)` と 1 文字も違わない）で、
 `ensure_ascii=False` で書く（配布元で `–` などと書かれた文字はそのままの文字になる）。
 既にあるファイルの内容が違うとき（UI で手直しして保存したなど）は上書きしない。`--force` で上書きする。
-ただし、以前の既定の Blender のパス（`cfui/config.py` の `LEGACY_BLENDER_PATHS` = `/snap/bin/blender`）で書いたままの
-写しは、手直しされていないものとして今の既定値へ書き換える（`setup-server.sh` を再実行すれば反映される。2 回目は「同じ内容なので触りません」）。
+ただし、次の写しは手直しされていないものとして今の内容へ書き換える（`setup-server.sh` を再実行すれば反映される。2 回目は「同じ内容なので触りません」）:
+
+- 以前の既定の Blender のパス（`cfui/config.py` の `LEGACY_BLENDER_PATHS` = `/snap/bin/blender`）で書いたままの写し
+- 日本語ノートを足す前の版（2026-11-02 より前）が書いたままの写し
+- ノートの文面・初期表示・01b の `proxy_points` だけが今と違う写し（既存の内容に今の版の 3 点を当て直すと、これから書く内容と一致するもの）。
+  画面で保存し直したファイルは書式（詰めた JSON・`frontendVersion` など）が変わるので、これには当たらない
 
 配布元 bat はワークフローを gzip + base64 で埋め込んでいるが、ここでは repo の `workflows/*.json` を使う
 （README に「JSON は手で読み込む用に同じものを置いている」とある。埋め込み側との突き合わせはしていない）。
+
+## 2K（01b）をこの機体で通す設定
+
+01b（2048）の WTiVo の `proxy_points`（CGAL に送る点の数）を、配布元の 25,000,000 から **20,000,000** に下げて写す
+（`cfui/config.py` の `WTIVO_2K_PROXY_POINTS`）。2026-11-03 に斧のサンプル（`viking_wolf_rune_axe.png`、seed は保存値、
+`--free-before`・タップなし・RAM の歯止め `--guard-mem-gib 43`）で、値だけを `--set 327.proxy_points=N` で変えて流した結果:
+
+| proxy_points | 結果 | 時間 | WTiVo の出力（連結成分） | WTiVo の時間 | memory.peak / anon / swap | Blender の RSS | VRAM のピーク | 最終 GLB |
+|---|---|---|---|---|---|---|---|---|
+| 12M | 成功 | 371 秒 | 39.67M 面（14） | 120 秒 | 31.3 / 26.8 / 0 GiB | 15.7 GiB | 13,255 MiB | 3.31M 面・境界辺 0・非多様体辺 0・殻 20 |
+| 16M | 成功 | 368 秒 | 39.62M 面（13） | 114 秒 | 34.2 / 24.3 / 4.7 GiB | 14.8 GiB | 13,255 MiB | 3.31M 面・0・0・殻 22 |
+| 20M | 成功 | 358 秒 | 39.59M 面（8） | 114 秒 | 34.6 / 24.9 / 3.5 GiB | 15.6 GiB | 13,223 MiB | 3.31M 面・0・0・殻 15 |
+| 25M（配布元） | 中断 | 500 秒 | 82.55M 面（54） | 227 秒 | 41.0 / 36.9 / 7.0 GiB | 32.3 GiB | 13,255 MiB | なし（LODTailor で止まる） |
+
+- 合格の条件は `history.status_str == "success"`・最終 GLB が `measure_mesh.py` で境界辺 0 かつ非多様体辺 0・
+  memory.peak が 44 GiB（`MemoryHigh`）未満。12M・16M・20M はすべて満たし、通った最大の 20M を採った。
+- WTiVo は連結成分（`[WTiVo-Component] components=`）のうち最大のものを残す（`faithc_component_mode=largest`。
+  残した網は 4 回とも `bodies=1`）。最終 GLB の殻は、その後の段で増えている（2026-10-03 の 01 でも、WTiVo の直後の殻 1 が
+  LODTailor の後で 3 になった）。
+- memory.peak のピークは 3 回とも WTiVo の最後の段（投入から約 260 秒）で、そのとき Blender はまだ動いていない。
+  Blender の RSS のピーク（15 GiB 前後）は、その後の LODTailor の段。
+- 25M は WTiVo までは通った（`watertight=True`）が、最終段に入る網が 20M の 19.4M 面から 48.2M 面に増え
+  （最小カットの反復 3,595 → 12,251 回）、出力が約 2 倍・殻 54 になった。続く LODTailor の Blender が RSS 32.3 GiB まで使い、
+  anon + swap が 43.1 GiB で歯止めに当たって止めた（ノードは `LODsmith decimation failed`）。2026-10-03 の中断
+  （下の「実機試験の結果（2026-10-03）」。タップ 3 つ付き）と同じ 82.6M 面で、25M ではこの機体の RAM に収まらない。
+- 12M〜20M では WTiVo の出力の面数がほぼ同じで、20M と 25M のあいだで跳ぶ。跳ぶ場所は画像によって変わるかもしれない
+  （斧のサンプルでしか測っていない）。別の画像で RAM が足りなくなったら、`--proxy-points-2k 16000000` などで写し直すか、
+  画面で WTiVo の `proxy_points` を下げる。
+- `scripts/adapt_workflows.py --proxy-points-2k N` で値を変えて写せる（`0` で配布元の 25M のまま）。日本語ノートの目安は、
+  測った値（12M・16M・20M）のときだけ書く。
 
 ## 重みの置き場
 
@@ -371,6 +420,27 @@ tools/comfyui/.venv/bin/python tools/comfyui/scripts/measure_mesh.py OUT.glb --r
   （2026-10-03 に 02 で起きた）。ベイク後の GLB は `output/LODTailorBakeForger/latest/baked_low.glb`
   （回ごとに消して書き直される）を直接測る。
 
+### 実機試験の結果（2026-11-03、再確認。入力・seed・`--free-before` は 10/3 と同じ、タップなし）
+
+`run-comfyui doctor`（WTiVo の自己試験込み）は全項目 OK（穴あき球 5,060 面 → 602,628 面、`watertight=True`、4 秒）。
+写し（日本語ノート付き。01b は `proxy_points` 20M に写し直したもの）をそのまま流し、最終 GLB を `measure_mesh.py` で測った。01b は上の「2K（01b）をこの機体で通す設定」の梯子の 20M の回と WTiVo の出力（39,585,464 面）も最終 GLB の面数も同じだった。作業用の手順は `logs/gpu-tests.sh`（追跡しない）。
+
+| | 01（1536） | 02（テクスチャ） | 03（01 の出力から） | 01b（2048 / 20M） |
+|---|---|---|---|---|
+| 結果 | 成功 240 秒（10/3: 240 秒） | 成功 374 秒（10/3 の直接起動: 393 秒） | 成功 174 秒（10/3: 205 秒） | 成功 361 秒（10/3 の 25M は中断） |
+| cgroup の memory.peak / anon | 23.2 / 18.4 GiB | 26.9 / 18.6 GiB | 23.0 / 10.5 GiB | 34.3 / 24.9 GiB（swap 3.1 GiB） |
+| Blender の RSS（cgroup の中） | 8.2 GiB | 8.0 GiB | 6.4 GiB | 15.6 GiB |
+| VRAM のピーク | 10,877 MiB | 10,689 MiB | 7,591 MiB | 13,223 MiB |
+| WTiVo | 20,446,160 面・66 秒 | 60.8 秒 | （使わない） | 39,585,464 面・114 秒 |
+| 最終 GLB（溶接後） | 3,266,464 面・境界辺 0・非多様体辺 0・殻 3 | 高ポリ 3,262,218 面・殻 1 / 低ポリ 29,986 面・殻 1（どちらも境界辺 0・非多様体辺 0） | テクスチャ付き 3,262,260 面・殻 2 / 低ポリ 30,000 面・殻 1（同） | 3,314,412 面・境界辺 0・非多様体辺 0・殻 15 |
+
+- memory.peak は cgroup の `memory.current` の最大で、Blender とファイルのキャッシュ（重みや GLB の読み書き）を含む。
+  10/3 の表の 01・03 は Blender が cgroup の外だった（`/snap/bin/blender`）ので、そのまま比べられない。03 の 23.0 GiB のうち
+  anon は 10.5 GiB で、残りの多くはファイルのキャッシュ。
+- 02 の Bake Forger は 71.7 秒で、10/3 の 1 回目（270 秒。OptiX の準備と考えられる）のような遅れは出なかった。02 の低ポリは LODTailor の後で
+  `watertight=False bodies=4`、最後の Fast Merge（TEXTURE_SAFE）の 7 回目（距離 0.0007）で `geometric_watertight=True` に戻る（10/3 と同じ）。
+- ノードの時間（01）: 形状の KSampler 3 本が 13.7 / 8.9 / 47.4 秒、Quad 15.4 秒、WTiVo 66.5 秒、LODTailor 49.4 秒、Fast Merge 13.9 秒。
+
 ### 実機試験の結果（2026-10-03、入力 viking_wolf_rune_axe.png、seed は保存値、`--free-before`）
 
 | | 01（1536） | 02（テクスチャ） | 03（01 の出力から） | 01b（2048 / 25M） |
@@ -411,6 +481,8 @@ tools/comfyui/.venv/bin/python tools/comfyui/scripts/measure_mesh.py OUT.glb --r
 - 01b の WTiVo は 2048 で 41.3M 頂点 / 82.6M 面（01 の約 4 倍、殻 54 から最大を選ぶ）を作り、その後の最終段
   （00:59:59〜01:00:39）で anon が 24 → 40 GiB に増えた。そのまま進むと、この面数を LODTailor が GLB に書き出し
   cgroup 外の Blender が読むため、RAM 62.5 GiB の機体では足りない見込み（試していない）。
+  → 2026-11-03 にタップなしで試すと、WTiVo は同じ 82.55M 面を出して通り、LODTailor の Blender（cgroup の中）が RSS 32.3 GiB を使って
+  RAM の歯止めに当たった（上の「2K（01b）をこの機体で通す設定」）。
 
 ## 試験
 

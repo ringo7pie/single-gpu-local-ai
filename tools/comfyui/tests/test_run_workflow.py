@@ -16,6 +16,7 @@ sys.path.insert(0, str(TOOL_DIR / "scripts"))
 import pytest  # noqa: E402
 import resource_monitor  # noqa: E402
 import run_workflow as rw  # noqa: E402
+from cfui import config  # noqa: E402
 
 # ---------------------------------------------------------------- 試験用の /object_info（実物から必要な形だけ写した）
 OBJECT_INFO = {
@@ -564,8 +565,12 @@ def test_real_workflows_convert_when_vendor_exists() -> None:
     assert prompt["122"]["inputs"]["image"] == "viking_wolf_rune_axe.png"
     assert prompt["3"]["inputs"]["seed"] == 56 and report["controls"]["3"] == {"seed": "randomize"}
     assert prompt["328"]["inputs"]["blender_path"] == ["324", 0]
-    assert prompt["327"]["inputs"]["proxy_points"] == 25000000
+    # 01b の写しは、WTiVo の proxy_points だけをこの機体で通る値に下げている（scripts/adapt_workflows.py）
+    expected_points = config.WTIVO_2K_PROXY_POINTS or 25000000
+    assert prompt["327"]["inputs"]["proxy_points"] == expected_points
     assert all("refine_steps" in warning for warning in report["warnings"])
+    # 日本語の手順ノート（MarkdownNote）は画面だけのノードなので、API 形式には入らない
+    assert all(node["class_type"] != "MarkdownNote" for node in prompt.values())
 
 
 # ---------------------------------------------------------------- resource_monitor の読み取り

@@ -18,7 +18,7 @@ sys.path.insert(0, str(TOOL_DIR / "scripts"))
 
 import adapt_workflows  # noqa: E402
 import pytest  # noqa: E402
-from cfui import checks, config, workflows  # noqa: E402
+from cfui import checks, config, notes_ja, workflows  # noqa: E402
 from cfui.cli import (  # noqa: E402
     build_parser,
     build_serve_command,
@@ -308,6 +308,28 @@ def test_upstream_workflows_round_trip_when_vendor_exists() -> None:
             changed = [node["id"] for node in fallback["nodes"] if node != before[node["id"]]]
             changed_types = {before[node_id]["type"] for node_id in changed}
             assert changed_types <= {"LODTailorTheMeshTrimmer", "MemoryCleaner"}, (file_name, changed_types)
+        # この機体向けの変更で変わるのは、足した日本語ノートと 01b の WTiVo だけ
+        is_2k = file_name == config.WORKFLOW_2K_FILE
+        if is_2k:
+            assert workflows.wtivo_proxy_points(adapted) == workflows.UPSTREAM_2K_PROXY_POINTS
+        proxy_points = config.WTIVO_2K_PROXY_POINTS if is_2k else None
+        localized = workflows.localize_pixelartistry(adapted, notes_ja.note_for(file_name), proxy_points)
+        before = {node["id"]: node for node in adapted["nodes"]}
+        added = [node for node in localized["nodes"] if node["id"] not in before]
+        assert [node["title"] for node in added] == [workflows.JA_NOTE_TITLE], file_name
+        changed_types = {before[node["id"]]["type"] for node in localized["nodes"]
+                         if node["id"] in before and node != before[node["id"]]}
+        assert changed_types == ({"WTiVoNativeMeshToMesh"} if is_2k and proxy_points is not None else set()), file_name
+        assert localized["links"] == adapted["links"] and localized.get("groups") == adapted.get("groups")
+        # 日本語ノートは既存のノードとグループに重ならない
+        x0, y0 = workflows.JA_NOTE_POS
+        x1, y1 = x0 + workflows.JA_NOTE_SIZE[0], y0 + workflows.JA_NOTE_SIZE[1]
+        for node in adapted["nodes"]:
+            (px, py), (sx, sy) = node["pos"], node.get("size") or (0, 0)
+            assert not (px < x1 and px + sx > x0 and py < y1 and py + sy > y0), (file_name, node["id"])
+        for group in adapted.get("groups", []):
+            gx, gy, gw, gh = group["bounding"]
+            assert not (gx < x1 and gx + gw > x0 and gy < y1 and gy + gh > y0), (file_name, group["title"])
 
 
 # ---------------------------------------------------------------- adapt_workflows.adapt_all
@@ -402,6 +424,246 @@ def test_adapt_main_reports_format_error(tmp_path: Path, capsys: pytest.CaptureF
         (source / file_name).write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
     assert adapt_workflows.main(["--source-dir", str(source), "--dest-dir", str(tmp_path / "dest")]) == 1
     assert "写せませんでした" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- 日本語ノートと 2K（01b）の proxy_points
+
+
+def make_2k_workflow() -> dict:
+    """配布元の 01b と同じく、WTiVo が 2048 / 25M で、題名に「25M proxy points」を持つ形。"""
+    workflow = make_workflow()
+    wtivo = node_of(workflow, 327)
+    wtivo["title"] = "3 · WTiVo 2048 / 25M proxy points"
+    wtivo["widgets_values"] = [2048, 2048, 25000000, 1.0, 1.5, 20.0, 16, 0.0, "largest"]
+    return workflow
+
+
+def test_wtivo_widget_names_match_node_source() -> None:
+    source = config.CUSTOM_NODES_DIR / "WTiVo-WatertightVoxel-ComfyuiNode" / "comfy_node.py"
+    if not source.is_file():
+        pytest.skip("vendor が無い")
+    text = source.read_text(encoding="utf-8")
+    block = text[text.index("def INPUT_TYPES"):text.index("RETURN_TYPES")]
+    names = re.findall(r'^\s{16}"(\w+)": \(', block, flags=re.MULTILINE)
+    assert tuple(name for name in names if name != "mesh") == workflows.WTIVO_WIDGET_NAMES
+
+
+def test_set_wtivo_proxy_points_changes_value_and_title_only() -> None:
+    original = make_2k_workflow()
+    before = copy.deepcopy(original)
+    adapted = workflows.set_wtivo_proxy_points(original, 12_000_000)
+    assert original == before  # 元の dict は変えない
+    wtivo = node_of(adapted, 327)
+    assert wtivo["widgets_values"] == [2048, 2048, 12000000, 1.0, 1.5, 20.0, 16, 0.0, "largest"]
+    assert wtivo["title"] == "3 · WTiVo 2048 / 12M proxy points"
+    assert workflows.wtivo_proxy_points(adapted) == 12_000_000
+    # WTiVo 以外は 1 つも変わらない
+    assert [node for node in adapted["nodes"] if node["id"] != 327] == [
+        node for node in before["nodes"] if node["id"] != 327
+    ]
+    assert adapted["links"] == before["links"]
+    # 端数のある値は小数で書く。何度当てても同じ
+    half = workflows.set_wtivo_proxy_points(adapted, 12_500_000)
+    assert node_of(half, 327)["title"] == "3 · WTiVo 2048 / 12.5M proxy points"
+    assert workflows.set_wtivo_proxy_points(half, 12_500_000) == half
+
+
+def test_set_wtivo_proxy_points_keeps_title_without_count() -> None:
+    adapted = workflows.set_wtivo_proxy_points(make_workflow(), 8_000_000)
+    assert "title" not in node_of(adapted, 327)
+    assert workflows.wtivo_proxy_points(adapted) == 8_000_000
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5e7])
+def test_set_wtivo_proxy_points_rejects_bad_value(value: object) -> None:
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.set_wtivo_proxy_points(make_2k_workflow(), value)  # type: ignore[arg-type]
+
+
+def test_set_wtivo_proxy_points_rejects_unexpected_shape() -> None:
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.set_wtivo_proxy_points(make_workflow(with_wtivo=False), 12_000_000)
+    doubled = make_2k_workflow()
+    doubled["nodes"].append({**copy.deepcopy(node_of(doubled, 327)), "id": 400})
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.set_wtivo_proxy_points(doubled, 12_000_000)
+    short = make_2k_workflow()
+    node_of(short, 327)["widgets_values"] = [2048, 2048, 25000000]
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.set_wtivo_proxy_points(short, 12_000_000)
+    assert workflows.wtivo_proxy_points(short) is None
+
+
+def test_upsert_markdown_note_adds_once_then_updates_text_only() -> None:
+    original = make_workflow()
+    added = workflows.upsert_markdown_note(original, "使い方", "1 版目")
+    assert all(node["id"] != 353 for node in original["nodes"])  # 元の dict は変えない
+    note = node_of(added, 353)  # last_node_id 352 の次
+    assert note["type"] == "MarkdownNote" and note["title"] == "使い方"
+    assert note["widgets_values"] == ["1 版目"]
+    assert note["pos"] == list(workflows.JA_NOTE_POS) and note["size"] == list(workflows.JA_NOTE_SIZE)
+    assert note["inputs"] == [] and note["outputs"] == []
+    assert added["last_node_id"] == 353
+    assert added["nodes"][:-1] == original["nodes"] and added["links"] == original["links"]
+
+    # 画面で動かした位置は残し、文面だけ直す。足し直さない
+    note["pos"] = [100, 200]
+    updated = workflows.upsert_markdown_note(added, "使い方", "2 版目")
+    assert len(updated["nodes"]) == len(added["nodes"])
+    assert node_of(updated, 353)["widgets_values"] == ["2 版目"]
+    assert node_of(updated, 353)["pos"] == [100, 200]
+    assert workflows.upsert_markdown_note(updated, "使い方", "2 版目") == updated
+
+
+def test_upsert_markdown_note_rejects_non_workflow() -> None:
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.upsert_markdown_note({}, "使い方", "本文")
+    with pytest.raises(workflows.WorkflowFormatError):
+        workflows.upsert_markdown_note({"nodes": {}}, "使い方", "本文")
+
+
+def test_localize_pixelartistry_changes_only_note_view_and_proxy() -> None:
+    original = workflows.set_blender_path(make_2k_workflow(), config.BLENDER_PATH)
+    localized = workflows.localize_pixelartistry(original, "本文", 12_000_000)
+    assert localized["extra"]["ds"] == workflows.PIXELARTISTRY_VIEW
+    assert workflows.wtivo_proxy_points(localized) == 12_000_000
+    notes = [node for node in localized["nodes"] if node.get("title") == workflows.JA_NOTE_TITLE]
+    assert len(notes) == 1 and notes[0]["widgets_values"] == ["本文"]
+    before = {node["id"]: node for node in original["nodes"]}
+    changed = {node["id"] for node in localized["nodes"] if node["id"] not in before or node != before[node["id"]]}
+    assert changed == {327, notes[0]["id"]}
+    assert localized["links"] == original["links"]
+    # 何度当てても同じ。proxy_points=None なら WTiVo に触れない
+    assert workflows.localize_pixelartistry(localized, "本文", 12_000_000) == localized
+    untouched = workflows.localize_pixelartistry(original, "本文")
+    assert workflows.wtivo_proxy_points(untouched) == workflows.UPSTREAM_2K_PROXY_POINTS
+
+
+def test_notes_ja_has_a_note_for_every_workflow() -> None:
+    for file_name in config.WORKFLOW_FILES:
+        text = notes_ja.note_for(file_name)
+        assert text.startswith("## 使い方") and "Run" in text and "/snap/blender/current/blender" in text, file_name
+    with pytest.raises(KeyError):
+        notes_ja.note_for("unknown.json")
+
+
+def test_notes_ja_2k_note_follows_proxy_points() -> None:
+    text = notes_ja.note_for(config.WORKFLOW_2K_FILE, 16_000_000)
+    assert "16,000,000" in text and "16M" in text and "25,000,000" in text
+    failed = notes_ja.note_for(config.WORKFLOW_2K_FILE, None)
+    assert "通らない" in failed and "16,000,000" not in failed
+    # 目安は測った値のときだけ出す（測っていない値に別の値の数字を書かない）
+    assert "約 35 GiB" in notes_ja.note_for(config.WORKFLOW_2K_FILE, 20_000_000)
+    unmeasured = notes_ja.note_for(config.WORKFLOW_2K_FILE, 13_000_000)
+    assert "この値では未計測" in unmeasured and "GiB（Blender" not in unmeasured.split("### 調整")[0].split("### 上流との違い")[1]
+
+
+def test_config_2k_settings_are_consistent() -> None:
+    assert config.WORKFLOW_2K_FILE in config.WORKFLOW_FILES
+    value = config.WTIVO_2K_PROXY_POINTS
+    assert value is None or (isinstance(value, int) and 0 < value < workflows.UPSTREAM_2K_PROXY_POINTS)
+
+
+def write_2k_source(directory: Path) -> tuple[str, str]:
+    """01b（2K）と 01 の 2 本を、配布元と同じ書式（indent=2）で置く。"""
+    directory.mkdir(parents=True, exist_ok=True)
+    with_2k = config.WORKFLOW_2K_FILE
+    standard = "PixelArtistry_01_Image_to_Watertight_Mesh.json"
+    (directory / with_2k).write_text(json.dumps(make_2k_workflow(), indent=2), encoding="utf-8")
+    (directory / standard).write_text(json.dumps(make_workflow(), indent=2), encoding="utf-8")
+    return with_2k, standard
+
+
+def test_adapt_all_adds_japanese_note_and_lowers_2k_proxy_points_only(tmp_path: Path) -> None:
+    names = write_2k_source(tmp_path / "src")
+    dest, fallback_dir = tmp_path / "dest", tmp_path / "fallback"
+    adapt_workflows.adapt_all(
+        tmp_path / "src", dest, fallback_dir, config.BLENDER_PATH, 1 / 1536, False, names, proxy_points_2k=12_000_000
+    )
+    written_2k = json.loads((dest / names[0]).read_text(encoding="utf-8"))
+    written_01 = json.loads((dest / names[1]).read_text(encoding="utf-8"))
+    assert workflows.wtivo_proxy_points(written_2k) == 12_000_000
+    assert workflows.wtivo_proxy_points(written_01) == 12_000_000  # 01 は元から 12M。値は触らない
+    assert node_of(written_01, 327) == node_of(make_workflow(), 327)
+    for written, file_name in ((written_2k, names[0]), (written_01, names[1])):
+        notes = [node for node in written["nodes"] if node.get("title") == workflows.JA_NOTE_TITLE]
+        assert len(notes) == 1 and notes[0]["widgets_values"] == [notes_ja.note_for(file_name, 12_000_000)]
+        assert written["extra"]["ds"] == workflows.PIXELARTISTRY_VIEW
+        assert workflows.blender_path_value(written) == config.BLENDER_PATH
+
+    # 予備案は Blender のパスだけを変えたものから作る（ノートも 2K の変更も当てない）
+    for file_name in names:
+        fallback = json.loads((fallback_dir / adapt_workflows.fallback_name(file_name)).read_text(encoding="utf-8"))
+        expected = workflows.make_fallback(
+            workflows.set_blender_path(json.loads((tmp_path / "src" / file_name).read_text(encoding="utf-8")),
+                                       config.BLENDER_PATH)
+        )
+        assert fallback == expected
+
+    # proxy_points_2k=None なら 01b も上流の値のまま
+    upstream = tmp_path / "upstream"
+    adapt_workflows.adapt_all(tmp_path / "src", upstream, None, config.BLENDER_PATH, 1 / 1536, False, names,
+                              proxy_points_2k=None)
+    kept_2k = json.loads((upstream / names[0]).read_text(encoding="utf-8"))
+    assert workflows.wtivo_proxy_points(kept_2k) == workflows.UPSTREAM_2K_PROXY_POINTS
+
+
+def test_adapt_all_migrates_copies_written_by_earlier_versions(tmp_path: Path) -> None:
+    names = write_2k_source(tmp_path / "src")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    source = {name: json.loads((tmp_path / "src" / name).read_text(encoding="utf-8")) for name in names}
+    # 1) 日本語ノートを足す前の版（Blender のパスだけ変えた写し）
+    (dest / names[0]).write_text(
+        workflows.dump_workflow(workflows.set_blender_path(source[names[0]], config.BLENDER_PATH)), encoding="utf-8"
+    )
+    # 2) ノートの文面と 2K の値が今と違う版（このスクリプトの以前の版が書いたまま）
+    older = workflows.localize_pixelartistry(
+        workflows.set_blender_path(source[names[1]], config.BLENDER_PATH), "古い文面"
+    )
+    (dest / names[1]).write_text(workflows.dump_workflow(older), encoding="utf-8")
+
+    results = adapt_workflows.adapt_all(
+        tmp_path / "src", dest, None, config.BLENDER_PATH, 1 / 1536, False, names, proxy_points_2k=12_000_000
+    )
+    assert [status for _path, status in results] == ["migrated", "migrated"]
+    again = adapt_workflows.adapt_all(
+        tmp_path / "src", dest, None, config.BLENDER_PATH, 1 / 1536, False, names, proxy_points_2k=16_000_000
+    )
+    # 2K の値を変えると 01b のノートと値が変わる（以前の版のまま → 書き換える）。01 はそのまま
+    assert [status for _path, status in again] == ["migrated", "unchanged"]
+    assert workflows.wtivo_proxy_points(json.loads((dest / names[0]).read_text(encoding="utf-8"))) == 16_000_000
+
+
+def test_adapt_all_keeps_copy_saved_again_from_the_screen(tmp_path: Path) -> None:
+    names = write_2k_source(tmp_path / "src")
+    dest = tmp_path / "dest"
+    adapt_workflows.adapt_all(tmp_path / "src", dest, None, config.BLENDER_PATH, 1 / 1536, False, names)
+    # 画面で保存し直すと、詰めた JSON になり frontendVersion が入る（2026-10-25 に Image_to_3D で確かめた変化）
+    saved = json.loads((dest / names[1]).read_text(encoding="utf-8"))
+    saved.setdefault("extra", {})["frontendVersion"] = "1.55.17"
+    (dest / names[1]).write_text(json.dumps(saved), encoding="utf-8")
+    results = adapt_workflows.adapt_all(
+        tmp_path / "src", dest, None, config.BLENDER_PATH, 1 / 1536, False, names, proxy_points_2k=16_000_000
+    )
+    assert {path.name: status for path, status in results}[names[1]] == "kept"
+    assert json.loads((dest / names[1]).read_text(encoding="utf-8")) == saved
+
+
+def test_adapt_main_proxy_points_2k_option(tmp_path: Path) -> None:
+    names = write_2k_source(tmp_path / "src")
+    for name in config.WORKFLOW_FILES:
+        if name not in names:
+            (tmp_path / "src" / name).write_text(json.dumps(make_workflow(with_wtivo=False), indent=2), encoding="utf-8")
+    common = ["--source-dir", str(tmp_path / "src"), "--no-easy"]
+    assert adapt_workflows.main([*common, "--dest-dir", str(tmp_path / "a"), "--proxy-points-2k", "20000000"]) == 0
+    assert workflows.wtivo_proxy_points(json.loads((tmp_path / "a" / names[0]).read_text(encoding="utf-8"))) == 20_000_000
+    assert adapt_workflows.main([*common, "--dest-dir", str(tmp_path / "b"), "--proxy-points-2k", "0"]) == 0
+    assert (
+        workflows.wtivo_proxy_points(json.loads((tmp_path / "b" / names[0]).read_text(encoding="utf-8")))
+        == workflows.UPSTREAM_2K_PROXY_POINTS
+    )
+    assert adapt_workflows.main([*common, "--dest-dir", str(tmp_path / "c"), "--proxy-points-2k", "-5"]) == 1
 
 
 # ---------------------------------------------------------------- 入口ワークフロー（Image_to_3D.app.json）

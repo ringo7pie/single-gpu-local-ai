@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import uuid
 from typing import Any
 
@@ -45,6 +46,37 @@ LODTAILOR_WIDGET_NAMES = (
     "seal_keep_trying",
     "timeout_seconds",
 )
+
+# WTiVoNativeMeshToMesh.INPUT_TYPES の並び（WTiVo-WatertightVoxel-ComfyuiNode/comfy_node.py:90-170）。
+# widgets_values はこの順に並ぶ（mesh は結線なので含まない）。
+WTIVO_WIDGET_NAMES = (
+    "input_res",
+    "final_res",
+    "proxy_points",
+    "proxy_eps_scale",
+    "proxy_feature_weight",
+    "lambda_fill",
+    "threads",
+    "thin_iso_vox",
+    "faithc_component_mode",
+)
+# 配布元の 01b（2K）の WTiVo の proxy_points。試験で上流の変化を見つけるために持つ。
+UPSTREAM_2K_PROXY_POINTS = 25_000_000
+# WTiVo の題名の「25M proxy points」の部分（01b は「3 · WTiVo 2048 / 25M proxy points」）。
+_PROXY_TITLE_RE = re.compile(r"\b\d+(?:\.\d+)?M proxy points\b")
+
+# 写しに足す日本語の手順ノート。「Upload Input Image Here」グループ（x=-5090, y=440、幅 770）の真上に置く。
+# 配布元の英語のノート（x=-6600 / -5860）は、配布元の初期表示（縮尺 0.1）でしか画面に入らない位置にある。
+JA_NOTE_TITLE = "使い方（日本語・この機体）"
+JA_NOTE_POS = (-5090, -240)
+JA_NOTE_SIZE = (770, 660)
+# ノードの色（litegraph の green）。配布元のノート（既定色・#222）と見分けやすくする。
+JA_NOTE_COLOR = "#232"
+JA_NOTE_BGCOLOR = "#353"
+# 写しを開いたときの初期表示。左上に映るグラフ座標は (-offset_x, -offset_y)。縮尺 0.5 なら、
+# 横 1700px・縦 900px の画面で x=-5250〜-1850・y=-300〜1500 が映る（日本語ノート・Load Image・前処理）。
+# 配布元は全体が入る縮尺 0.1 で開き、文字が読めない。
+PIXELARTISTRY_VIEW = {"scale": 0.5, "offset": [5250.0, 300.0]}
 
 # 予備案の Voxel Remesh の細かさ。WTiVo の input_res / final_res（1536）と同じ格子間隔にする。
 FALLBACK_RELATIVE_VOXEL_SIZE = 1.0 / 1536.0
@@ -457,6 +489,108 @@ def make_easy_image_to_3d(workflow: dict[str, Any]) -> dict[str, Any]:
         if isinstance(easy.get("id"), str):
             easy["id"] = str(uuid.uuid5(_EASY_UUID_NAMESPACE, easy["id"]))
     return easy
+
+
+def _millions_label(value: int) -> str:
+    """12000000 → "12"、12500000 → "12.5"（題名の「NM proxy points」用）。"""
+
+    return f"{value / 1_000_000:g}"
+
+
+def wtivo_proxy_points(workflow: dict[str, Any]) -> int | None:
+    """WTiVo が 1 個なら、その proxy_points を返す（1 個でなければ None）。"""
+
+    targets = [node for node in workflow.get("nodes", []) if node.get("type") == WTIVO_NODE_TYPE]
+    if len(targets) != 1:
+        return None
+    values = targets[0].get("widgets_values")
+    if not isinstance(values, list) or len(values) != len(WTIVO_WIDGET_NAMES):
+        return None
+    value = values[WTIVO_WIDGET_NAMES.index("proxy_points")]
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def set_wtivo_proxy_points(workflow: dict[str, Any], proxy_points: int) -> dict[str, Any]:
+    """WTiVo の proxy_points を proxy_points にした写しを返す。元の dict は変えない。
+
+    題名に「25M proxy points」のような数があれば、それも同じ値に直す（画面で見て値が分かるように）。
+    WTiVo がちょうど 1 個で、widgets_values の並びが WTIVO_WIDGET_NAMES と同じ長さ・proxy_points が整数でなければ
+    上流が変わった可能性があるので止める。
+    """
+
+    if isinstance(proxy_points, bool) or not isinstance(proxy_points, int) or proxy_points <= 0:
+        raise WorkflowFormatError(f"proxy_points は正の整数にする: {proxy_points!r}")
+    adapted = copy.deepcopy(workflow)
+    if wtivo_proxy_points(adapted) is None:
+        raise WorkflowFormatError(
+            f"{WTIVO_NODE_TYPE} がちょうど 1 個で、widgets_values が {len(WTIVO_WIDGET_NAMES)} 個・"
+            "proxy_points が整数、という形ではない（上流が変わった可能性）"
+        )
+    node = next(item for item in adapted["nodes"] if item.get("type") == WTIVO_NODE_TYPE)
+    node["widgets_values"][WTIVO_WIDGET_NAMES.index("proxy_points")] = proxy_points
+    if isinstance(node.get("title"), str):
+        node["title"] = _PROXY_TITLE_RE.sub(f"{_millions_label(proxy_points)}M proxy points", node["title"])
+    return adapted
+
+
+def upsert_markdown_note(
+    workflow: dict[str, Any],
+    title: str,
+    text: str,
+    pos: tuple[float, float] = JA_NOTE_POS,
+    size: tuple[float, float] = JA_NOTE_SIZE,
+) -> dict[str, Any]:
+    """題名が title の MarkdownNote の文面を text にした写しを返す。無ければ pos に足す（画面だけのノード）。
+
+    すでにあれば文面だけを直し、位置・大きさは変えない（画面で動かした場所を残す）。何度当てても同じ結果になる。
+    """
+
+    if not isinstance(workflow.get("nodes"), list):
+        raise WorkflowFormatError("nodes が無い（ComfyUI の UI 形式のワークフローではない）")
+    adapted = copy.deepcopy(workflow)
+    note = _single_titled_node(adapted, MARKDOWN_NOTE_NODE_TYPE, (title,))
+    if note is not None:
+        note["widgets_values"] = [text]
+        return adapted
+    node_id = _next_node_id(adapted) if adapted["nodes"] else int(adapted.get("last_node_id", 0)) + 1
+    adapted["nodes"].append(
+        {
+            "id": node_id,
+            "type": MARKDOWN_NOTE_NODE_TYPE,
+            "pos": list(pos),
+            "size": list(size),
+            "flags": {},
+            "order": _next_order(adapted) if adapted["nodes"] else 0,
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "title": title,
+            "properties": {},
+            "widgets_values": [text],
+            "color": JA_NOTE_COLOR,
+            "bgcolor": JA_NOTE_BGCOLOR,
+        }
+    )
+    adapted["last_node_id"] = node_id
+    return adapted
+
+
+def localize_pixelartistry(
+    workflow: dict[str, Any], note_text: str, proxy_points: int | None = None
+) -> dict[str, Any]:
+    """PixelArtistry の写しに、この機体向けの変更を当てた写しを返す。何度当てても同じ結果になる。
+
+    Blender のパスは set_blender_path が別に変える。ここで変えるのは次の 3 点だけで、ほかのノードの結線と値は変えない。
+      - 日本語の手順ノート（題名 JA_NOTE_TITLE）を足す。すでにあれば文面だけ直す（upsert_markdown_note）
+      - グラフの初期表示（extra.ds）を PIXELARTISTRY_VIEW にする
+      - proxy_points が None でなければ、WTiVo の proxy_points をその値にする（01b 用。set_wtivo_proxy_points）
+    """
+
+    localized = upsert_markdown_note(workflow, JA_NOTE_TITLE, note_text)
+    localized.setdefault("extra", {})["ds"] = copy.deepcopy(PIXELARTISTRY_VIEW)
+    if proxy_points is not None:
+        localized = set_wtivo_proxy_points(localized, proxy_points)
+    return localized
 
 
 def dump_workflow(workflow: dict[str, Any]) -> str:

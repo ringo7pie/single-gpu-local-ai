@@ -264,6 +264,12 @@ WORKFLOW_FILES = (
     "PixelArtistry_02_Image_to_GameReady_Asset.json",
     "PixelArtistry_03_Your_Mesh_to_GameReady_Asset.json",
 )
+# 2K（2048）の写し。WTiVo の proxy_points だけ、この機体で通る値に下げて写す（scripts/adapt_workflows.py）。
+WORKFLOW_2K_FILE = "PixelArtistry_01b_Image_to_Watertight_Mesh_2K.json"
+# 斧のサンプル（2026-11-03）: 12M・16M・20M は WTiVo の出力が約 39.6M 面で通り、cgroup の memory.peak は 31〜35 GiB。
+# 上流の値 25M は WTiVo の出力が 82.6M 面に跳び、続く LODTailor の Blender が RSS 32 GiB まで使って RAM の歯止め
+# （anon+swap 43 GiB）に当たった（MemoryMax 48 GiB・RAM 62.5 GiB）。通った最大の 20M を使う。None なら上流の値のまま写す。
+WTIVO_2K_PROXY_POINTS: int | None = 20_000_000
 
 # WTiVo の自己試験（配布元 bat の L457-484 と同じ条件）。
 SELFTEST_SUBDIVISIONS = 4

@@ -2,8 +2,11 @@
 """PixelArtistry のワークフロー 4 本を、ComfyUI の利用者ワークフローへ写す（setup-server.sh の [11/12]）。
 
 配布元 bat の [6/8] の置き換え。写すときに変えるのは Blender のパスのノード（PrimitiveString、
-既定値 "blender"）の値だけで、/snap/blender/current/blender にする（/usr/bin/blender は apt の 4.0.2 なので
+既定値 "blender"）の値で、/snap/blender/current/blender にする（/usr/bin/blender は apt の 4.0.2 なので
 使わない。/snap/bin/blender は snap run が comfyui の cgroup の外へ子を移すので使わない）。
+そのうえで、この機体向けの変更を当てる（cfui.workflows.localize_pixelartistry）:
+日本語の手順ノート（cfui.notes_ja）を足し、開いたときの初期表示を日本語ノートと Load Image の位置にし、
+01b（2K）だけ WTiVo の proxy_points を config.WTIVO_2K_PROXY_POINTS に下げる（--proxy-points-2k で変える。0 で上流のまま）。
 それ以外は変えない。書式は配布元と同じ indent=2・末尾改行なしで、ensure_ascii=False で書く。
 
 そのほかに、画像を 1 枚入れて Run を押すだけの入口 Image_to_3D.app.json も書く。ComfyUI 同梱のテンプレート
@@ -13,11 +16,13 @@
 （入力画像などの手直しは残す。何度流しても同じ結果になる）。
 
 --fallback を付けると、予備案の写しも書く（WTiVo を外し、直後の LODTailor の Voxel Remesh を
-relative_voxel_size=1/1536 で使う）。WTiVo を含まない 03 は予備案を作らない。
+relative_voxel_size=1/1536 で使う）。WTiVo を含まない 03 は予備案を作らない。予備案には日本語ノートも 2K の変更も当てない。
 
 既に置いてあるファイルが、これから書く内容と違うときは上書きしない（UI で手直しして保存したものを
 守るため）。--force で上書きする。ただし、以前の既定の Blender のパス（config.LEGACY_BLENDER_PATHS）で
-書いたままの内容と一致するファイルは、手直しされていないので今の既定値へ書き換える。
+書いたままの内容と一致するファイルと、このスクリプトが以前の版で書いたままのファイル（日本語ノートを足す前の写し、
+ノートの文面か 2K の値だけが今と違う写し）は、手直しされていないので今の内容へ書き換える。
+画面で保存し直したファイルは書式（詰めた JSON・frontendVersion・表示位置）が変わるので、この判定には当たらない。
 標準ライブラリだけで動く。
 """
 
@@ -27,18 +32,19 @@ import argparse
 import importlib.util
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 # scripts/ の 1 つ上（tools/comfyui）を import 先に足す。cfui を editable で入れていない python でも動くように。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cfui import config  # noqa: E402
+from cfui import config, notes_ja  # noqa: E402
 from cfui.workflows import (  # noqa: E402
     FALLBACK_RELATIVE_VOXEL_SIZE,
     WorkflowFormatError,
     dump_workflow,
     has_wtivo,
+    localize_pixelartistry,
     make_easy_image_to_3d,
     make_fallback,
     set_blender_path,
@@ -54,10 +60,18 @@ def fallback_name(file_name: str) -> str:
     return f"{stem}{FALLBACK_SUFFIX}.{extension}"
 
 
-def write_if_safe(path: Path, text: str, force: bool, replaceable: Sequence[str] = ()) -> str:
-    """書いた / 以前の既定値のまま書き換えた / 同じなので触らない / 違うので触らない、のどれかを返す。
+def write_if_safe(
+    path: Path,
+    text: str,
+    force: bool,
+    replaceable: Sequence[str] = (),
+    refresh: Callable[[str], str | None] | None = None,
+) -> str:
+    """書いた / 以前の版のまま書き換えた / 同じなので触らない / 違うので触らない、のどれかを返す。
 
     replaceable は「手直しされていない古い写し」の内容。既存の内容がこのどれかと一致するなら上書きしてよい。
+    refresh は既存の内容に「このスクリプトが持つ値（ノートの文面など）」だけを今の版で当て直した文字列を返す関数
+    （当て直せなければ None）。その結果が text と同じなら、違いはこのスクリプトの持つ値だけなので上書きしてよい。
     """
 
     status = "written"
@@ -65,7 +79,7 @@ def write_if_safe(path: Path, text: str, force: bool, replaceable: Sequence[str]
         current = path.read_text(encoding="utf-8")
         if current == text:
             return "unchanged"
-        if current in replaceable:
+        if current in replaceable or (refresh is not None and refresh(current) == text):
             status = "migrated"
         elif not force:
             return "kept"
@@ -76,11 +90,24 @@ def write_if_safe(path: Path, text: str, force: bool, replaceable: Sequence[str]
 
 _STATUS_LABELS = {
     "written": "書きました",
-    "migrated": "以前の既定の Blender のパスのままだったので、今の既定値に書き換えました",
+    "migrated": "手直しされていない以前の版の写しだったので、今の版に書き換えました",
     "unchanged": "同じ内容なので触りません",
     "kept": "内容が違うので上書きしません（UI で手直しした可能性。--force で上書き）",
     "upgraded": "今の版の変更を当てました（手直しした内容は残しています）",
 }
+
+
+def _refresher(note_text: str, proxy_points: int | None) -> Callable[[str], str | None]:
+    """既存の写しに、今の版のノートの文面・初期表示・2K の値だけを当て直す関数（write_if_safe の refresh）。"""
+
+    def refresh(current: str) -> str | None:
+        try:
+            return dump_workflow(localize_pixelartistry(json.loads(current), note_text, proxy_points))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            # JSON でない・ワークフローの形でない（WorkflowFormatError は ValueError の派生）
+            return None
+
+    return refresh
 
 
 def adapt_all(
@@ -92,28 +119,41 @@ def adapt_all(
     force: bool,
     file_names: tuple[str, ...] = config.WORKFLOW_FILES,
     legacy_blender_paths: Sequence[str] = config.LEGACY_BLENDER_PATHS,
+    proxy_points_2k: int | None = config.WTIVO_2K_PROXY_POINTS,
 ) -> list[tuple[Path, str]]:
     """file_names を source_dir から読み、dest_dir（と fallback_dir）へ書く。結果の一覧を返す。
 
-    legacy_blender_paths は以前の既定の Blender のパス。そのパスで書いたままの写しは、手直しされて
-    いないものとして blender_path の内容に書き換える。
+    写しは「Blender のパス（set_blender_path）→ この機体向けの変更（localize_pixelartistry）」の順に当てる。
+    予備案は Blender のパスだけを変えたものから作る（日本語ノートと 2K の変更は当てない）。
+    legacy_blender_paths は以前の既定の Blender のパス。そのパスで書いたままの写し（ノートの有無を問わない）と、
+    このスクリプトの以前の版が書いたままの写しは、手直しされていないものとして今の内容に書き換える。
+    proxy_points_2k は 01b（config.WORKFLOW_2K_FILE）の WTiVo の proxy_points。None なら上流の値のまま。
     """
 
     results = []
     for file_name in file_names:
         source_path = source_dir / file_name
         workflow = json.loads(source_path.read_text(encoding="utf-8"))
+        proxy_points = proxy_points_2k if file_name == config.WORKFLOW_2K_FILE else None
+        note_text = notes_ja.note_for(file_name, proxy_points_2k)
         adapted = set_blender_path(workflow, blender_path)
+        localized = localize_pixelartistry(adapted, note_text, proxy_points)
         legacy = [
             set_blender_path(workflow, legacy_path)
             for legacy_path in legacy_blender_paths
             if legacy_path != blender_path
         ]
+        # 手直しされていない以前の写し: 旧い Blender のパスのもの（ノートを足す前と後）と、ノートを足す前の今のパスのもの
+        replaceable = [dump_workflow(item) for item in legacy]
+        replaceable += [dump_workflow(localize_pixelartistry(item, note_text, proxy_points)) for item in legacy]
+        replaceable.append(dump_workflow(adapted))
         dest_path = dest_dir / file_name
         results.append(
             (
                 dest_path,
-                write_if_safe(dest_path, dump_workflow(adapted), force, [dump_workflow(item) for item in legacy]),
+                write_if_safe(
+                    dest_path, dump_workflow(localized), force, replaceable, _refresher(note_text, proxy_points)
+                ),
             )
         )
 
@@ -194,6 +234,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="予備案の LODTailor の relative_voxel_size（既定: 1/1536）",
     )
     parser.add_argument(
+        "--proxy-points-2k",
+        type=int,
+        default=config.WTIVO_2K_PROXY_POINTS if config.WTIVO_2K_PROXY_POINTS is not None else 0,
+        help="01b（2K）の WTiVo の proxy_points（既定: config.WTIVO_2K_PROXY_POINTS。0 で上流の値 25,000,000 のまま）",
+    )
+    parser.add_argument(
         "--no-easy", action="store_true", help="入口ワークフロー（Image_to_3D.app.json）を書かない"
     )
     parser.add_argument(
@@ -227,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             blender_path=args.blender_path,
             relative_voxel_size=args.fallback_voxel_size,
             force=args.force,
+            proxy_points_2k=args.proxy_points_2k or None,
         )
     except (OSError, json.JSONDecodeError, WorkflowFormatError) as exc:
         print(f"ワークフローを写せませんでした: {exc}", file=sys.stderr)

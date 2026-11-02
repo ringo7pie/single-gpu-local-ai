@@ -29,6 +29,17 @@ ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しな�
 - 確かめていないこと: アプリモードの表示（入力欄の名前・結果の 3D）。利用者が画面で実行した記録はあるが、表示自体は見ていない。
   コードでは 3D 出力の分岐（`Preview3d`）があり、Save 3D の出力の種類（`3d`）と合う。表示がおかしければグラフ表示に切り替えて使う。
 
+## PixelArtistry の 4 本（2026-11-03 に実機で再確認）
+
+- 写し（`workflows/PixelArtistry/` の 4 本）は、Load Image の真上（`pos=(-5090,-240)`）に緑の日本語ノート「使い方（日本語・この機体）」を持ち、
+  開いたときの初期表示（`extra.ds`）は縮尺 0.5・`offset=(5250,300)`。本文は `cfui/notes_ja.py`、足すのは `adapt_workflows.py`。表示は目で確かめていない。
+- 01b（2K）の WTiVo `proxy_points` は配布元の 25M を **20M** に下げて写す（`cfui/config.py` の `WTIVO_2K_PROXY_POINTS`、`--proxy-points-2k`）。
+  斧のサンプルでは 12M・16M・20M が成功（約 6 分、WTiVo の出力 約 39.6M 面、memory.peak 31〜35 GiB、VRAM 約 13.2 GiB）。25M は出力が 82.55M 面に跳び、
+  LODTailor の Blender が RSS 32.3 GiB を使って RAM の歯止め（anon+swap 43 GiB）に当たる。跳ぶ値が画像で変わるかは確かめていない。
+- doctor（自己試験込み）は全項目 OK。01 は 240 秒・memory.peak 23.2 GiB、02 は 374 秒・26.9 GiB、03 は 174 秒・23.0 GiB、VRAM は 7.6〜10.9 GiB。
+  最終 GLB はどれも境界辺 0・非多様体辺 0。memory.peak は cgroup の中の Blender とファイルのキャッシュを含む。表と根拠は `tools/comfyui/README.md` の
+  「2K（01b）をこの機体で通す設定」と「実機試験の結果（2026-11-03、再確認）」を Read する。
+
 ## エラーの読み方
 
 - `CLIPLoader: Value not in list: clip_name: 'qwen_3_4b.safetensors' not in []` は、Z-Image・FLUX.2 klein などテキスト → 画像の
