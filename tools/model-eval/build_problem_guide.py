@@ -39,7 +39,7 @@ from evallib import common  # noqa: E402
 
 GUIDE_PATH = common.SUITES_DIR / "problem_guide.json"
 DEFAULT_OUT = common.REPO_DIR / "Documents" / f"AIモデル評価_出題内容_{common.DEFAULT_DATE}.html"
-MATH3D_ANSWER_DOC = common.REPO_DIR / "Documents" / "3D問題_実施モデル一覧_2026-10-08.md"
+MATH3D_ANSWER_DOC = common.REPO_DIR / "Documents" / "Back" / "3D問題_実施モデル一覧_2026-10-08.md"
 SURFACE = "#fcfcfb"
 
 # 問題の種類の色。dataviz スキルの検証済みの 8 色（青・オレンジ・アクア・黄・マゼンタ・緑・紫・赤）から、緑・アクア・赤を除いた 5 色を
@@ -541,7 +541,7 @@ def section_appendix(guide: dict[str, Any], summary: dict[str, Any]) -> str:
                 "tools/model-eval/suites/extra/<問>/prompt.md"),
         ("隠しテストと採点用ファイル", "tools/model-eval/suites/coding/c1〜c6/tests.py、tools/model-eval/suites/extra/<問>/answer.json、"
                               "採点器 tools/model-eval/suites/extra/grade_extra.py"),
-        ("3D 数学の正解", "Documents/3D問題_実施モデル一覧_2026-10-08.md"),
+        ("3D 数学の正解", "Documents/Back/3D問題_実施モデル一覧_2026-10-08.md"),
         ("点の記録", f"tools/model-eval/results/{date}/summary.json"),
         ("この解説の本文", "tools/model-eval/suites/problem_guide.json（作り直すのは tools/model-eval/build_problem_guide.py）"),
     ]

@@ -103,6 +103,9 @@ tools/hunyuan3d/patches/
 Documents/Qwen3.8-27B 運用マニュアル - Claude_files/
 Documents/Qwen3.8-27B 運用マニュアル - Claude.html
 
+# 第三者のインストーラ（Mobatek の MobaXterm。再配布の許諾を確かめていないので公開しない）。
+Documents/MobaXterm_Installer_*
+
 # ユーザーの作業フォルダ・ダウンロード置き場。
 zzz-Temp/
 Downloads/
