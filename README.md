@@ -7,7 +7,8 @@
 
 This repository is the glue, ops tooling and evaluation harness behind a personal GPU server (NVIDIA A30, 24 GB):
 an LLM server (Ollama), a MoE inference engine that splits experts between CPU and GPU (Strata),
-image-to-3D generation (Hunyuan3D, Pixal3D), a ComfyUI watertight-mesh workflow, a bridge that lets Claude Code / Codex
+image-to-3D generation (Hunyuan3D, Pixal3D), text-to-music and sound-effect generation (AudioCraft: MusicGen / AudioGen),
+a ComfyUI watertight-mesh workflow, a bridge that lets Claude Code / Codex
 hand mechanical coding work to a local Qwen, and a harness that compares cloud and local models on the same problems.
 
 > 日本語の詳細は [README.ja.md](README.ja.md)。
@@ -55,15 +56,16 @@ flowchart LR
     strata["Strata :8082-8086"]
     h3d["Hunyuan3D :7860"]
     p3d["Pixal3D :7861"]
+    audio["AudioCraft :7862"]
     comfy["ComfyUI :8188"]
     gpu[("A30 24 GB")]
   end
   browser --> portal
-  portal -- "systemctl --user" --> webui & strata & h3d & p3d & comfy
-  portal -- "unload before Strata" --> ollama
+  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & comfy
+  portal -- "unload before Strata / AudioCraft" --> ollama
   webui --> ollama & strata
   cloud -- "MCP" --> bridge["local-ai-bridge / qwen-worker"] --> ollama
-  ollama & strata & h3d & p3d & comfy --> gpu
+  ollama & strata & h3d & p3d & audio & comfy --> gpu
 ```
 
 ## What is in the box
@@ -74,6 +76,7 @@ flowchart LR
 | `tools/portal` | Service portal (port 8080): start / stop, GPU exclusion, memory limits. No dependencies | no |
 | `tools/strata` | MoE CPU–GPU split inference engine, five model variants (ports 8082–8086) | yes |
 | `tools/pixal3d` | Multi-view images → 3D mesh (Pixal3D, port 7861) | yes |
+| `tools/audiocraft` | Text → music and sound effects (MusicGen Medium / AudioGen Medium via AudioCraft, port 7862). Weights are non-commercial (CC-BY-NC 4.0) | yes |
 | `tools/hunyuan3d` | Four images → 3D mesh (Hunyuan3D-2mv, port 7860). **Needs license acceptance**, see below | yes |
 | `tools/comfyui` | ComfyUI + watertight-mesh workflow (port 8188); native parts built from source | yes |
 | `tools/qwen-worker` | MCP server that lets Claude Code / Codex use a local Qwen for read-only research and sandboxed edits | no (calls Ollama) |
@@ -98,7 +101,7 @@ cd single-gpu-local-ai
 ./localai start portal
 ```
 
-Then add what you need: `./localai install strata`, `pixal3d`, `comfyui`, `hunyuan3d`, `qwen-worker`.
+Then add what you need: `./localai install strata`, `pixal3d`, `comfyui`, `hunyuan3d`, `audiocraft`, `qwen-worker`.
 Heavy services are started from the portal (or `./localai start <name>`), one GPU service at a time.
 
 No GPU? You can still read the reports, run the portal and run the unit tests:
@@ -186,4 +189,5 @@ The code and documents in this repository are MIT-licensed ([LICENSE](LICENSE)).
   South Korea. This repository therefore does not ship patches against it, and `tools/hunyuan3d/setup-server.sh`
   asks you to accept the license (`--accept-tencent-license`) before it fetches anything.
 - **Pixal3D** output is treated as non-commercial (NVIDIA Source Code License components, Meta DINOv3).
+- **AudioCraft** code is MIT, but the MusicGen / AudioGen model weights are CC-BY-NC 4.0 (non-commercial only).
 - Product and company names belong to their owners; this project is not affiliated with or endorsed by them.

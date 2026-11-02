@@ -17,6 +17,7 @@
 | 8086 | Strata Swift 1.5（UkisAI が Qwen3.8-Flash-Next を思考が短く終わるように追加学習した派生の IQ3_XXS。2026-10-16 に追加） | 別途導入。systemd --user のユニット名は `strata-swift`。自動起動しない。ほかの Strata とは同時に動かせない |
 | 7860 | Hunyuan3D（4 枚の画像 → 3D メッシュ） | 別途導入 |
 | 7861 | Pixal3D（1〜4 枚の画像 → 3D メッシュ、別方式） | 別途導入 |
+| 7862 | 音楽・効果音生成（AudioCraft。MusicGen Medium で作曲、AudioGen Medium で効果音。重みは非商用） | 別途導入（`tools/audiocraft`）。systemd --user のユニット名は `audiocraft`。自動起動しない。GPU の排他グループに入る |
 | 8188 | ComfyUI（1 枚の画像 → 水密メッシュ・低ポリのゲーム用アセット。PixelArtistry のワークフロー） | 別途導入。systemd --user のユニット名は `comfyui` |
 | 11434 | Ollama API | 触らない |
 
@@ -63,7 +64,7 @@ Strata Swift 1.5（`strata-swift`）・Hunyuan3D（`hunyuan3d`）・Pixal3D（`p
 | 項目 | 内容 |
 |---|---|
 | 必須ヘッダ | `X-Portal-Request: 1`（無ければ 403。理由は下記） |
-| 対象 `key` | `open-webui`、`strata`、`strata-coder`、`strata-official`、`strata-official-iq3s`、`strata-swift`、`hunyuan3d`、`pixal3d`、`comfyui` のみ（それ以外の key は 404） |
+| 対象 `key` | `open-webui`、`strata`、`strata-coder`、`strata-official`、`strata-official-iq3s`、`strata-swift`、`hunyuan3d`、`pixal3d`、`comfyui`、`audiocraft` のみ（それ以外の key は 404） |
 | `action` | `start` か `stop` のみ（それ以外は 400） |
 | GET でこのパスを叩いた場合 | 405（誤操作防止。起動・停止は POST のみ） |
 | ユニットがまだ無い（未導入の）サービスを操作しようとした場合 | 409 |
@@ -74,7 +75,7 @@ Strata Swift 1.5（`strata-swift`）・Hunyuan3D（`hunyuan3d`）・Pixal3D（`p
 **認証は無い。LAN 内から誰でも起動・停止を呼べる。** LAN の外には公開していない前提での割り切り。
 そのうえで、次の 2 つで被害の範囲を絞っている。
 
-1. 操作できるユニットは `open-webui`・`strata`・`strata-coder`・`strata-official`・`strata-official-iq3s`・`strata-swift`・`hunyuan3d`・`pixal3d`・`comfyui` の 9 つに固定。利用者が渡した文字列を
+1. 操作できるユニットは `open-webui`・`strata`・`strata-coder`・`strata-official`・`strata-official-iq3s`・`strata-swift`・`hunyuan3d`・`pixal3d`・`comfyui`・`audiocraft` の 10 個に固定。利用者が渡した文字列を
    そのまま `systemctl` へ渡すことはない（`key` で `SERVICES` を引き、こちら側が持つユニット名だけを使う）。
    入口ページ自身（`portal`）は一覧に無いので、自分を止められない。
 2. `X-Portal-Request: 1` ヘッダを必須にしている。ヘッダの無い単純な POST は他サイトの JavaScript からでも
@@ -88,19 +89,20 @@ curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/service/hunyua
 curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/service/hunyuan3d/stop
 ```
 
-## GPU の排他（Hunyuan3D ⇔ Pixal3D ⇔ ComfyUI ⇔ Strata ⇔ Strata Flash-Next Coder ⇔ Strata 公式版）
+## GPU の排他（Hunyuan3D ⇔ Pixal3D ⇔ ComfyUI ⇔ AudioCraft ⇔ Strata ⇔ Strata Flash-Next Coder ⇔ Strata 公式版）
 
 Hunyuan3D・Pixal3D はどちらも GPU（VRAM）を使う 3D メッシュ生成器で、ComfyUI も Pixal3D / TRELLIS.2 の
 3D 生成で GPU を大きく使う。Strata の汎用版は VRAM を約 20GB 以上、RAM を約 50GB 以上使う推論エンジンで、
 Coder 版（`strata-coder`）は VRAM を大きく、RAM を約 32GB 級使う。公式版（`strata-official`）は汎用版と同程度
 （2026-10-07 の実測で、cgroup の `memory.peak` 50.00 GiB、VRAM は生成中 23,899 MiB）。公式版 IQ3_S（`strata-official-iq3s`）と
-Swift 1.5（`strata-swift`、2026-10-16 に追加）も汎用版・公式版と同じ程度。A30 1 枚・RAM 62.5 GiB では 8 つを
-同時に載せられず、**同時に動かせるのは 8 つのうち 1 つだけ**（Strata の 5 つどうしも同時には動かせない）。
+Swift 1.5（`strata-swift`、2026-10-16 に追加）も汎用版・公式版と同じ程度。音楽・効果音生成（`audiocraft`、2026-10-27 に追加）は
+1.5B のモデル 2 つを VRAM に載せる（2026-10-27 の実測で待機時 約 9.8 GiB、生成中 約 10〜11 GiB）。A30 1 枚・RAM 62.5 GiB では 9 つを
+同時に載せられず、**同時に動かせるのは 9 つのうち 1 つだけ**（Strata の 5 つどうしも同時には動かせない）。
 **どれかを起動すると、
 他のサービスが動いていれば（稼働中・起動中）自動で先に止めてから起動する。**
 
 - 純粋関数 `services_to_stop_before_start(key, states)`（`portal.py`）が、`GPU_EXCLUSIVE_KEYS =
-  ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift")` のうち
+  ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft")` のうち
   起動対象以外で running / starting のものの key 一覧を返す。
   例: ComfyUI を起動するとき Pixal3D が running なら `["pixal3d"]`。Open WebUI はグループ外なので
   常に空リスト。
@@ -130,7 +132,8 @@ Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 とも�
   `/api/ps` に到達できず確認できなかったこと）。VRAM が足りなければ Strata の起動が失敗するおそれがある。
 - Strata が停止中（`stopped`）のときだけ降ろす。すでに稼働中・起動中の Strata への start は何も起こらないので、
   無関係な Qwen の応答を途中で切らない。未導入（409）・他のサービスの停止に失敗した（起動中止）ときも降ろさない。
-- 対象は Strata の 5 つだけにしている（`OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift")`）。Hunyuan3D は、上流への当て物 0001 を
+- 対象は Strata の 5 つと、新規の `audiocraft`（Qwen の 22 GiB と同居できないため）だけにしている
+  （`OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft")`）。Hunyuan3D は、上流への当て物 0001 を
   当てた環境では生成の直前に自分で降ろす（当て物は公開版に含まない。公開版では `serve` の起動時と、手で実行する
   `run-hunyuan3d free-vram` だけ。`knowledge/10-silver/areas/hunyuan3d.md`）。Pixal3D・ComfyUI は、これまでの動作（画面の警告を見て
   利用者が降ろす）を変えないため含めていない。増やすときはこのタプルと、`index.html` の同名の配列に足す
@@ -388,6 +391,19 @@ Swift Open License v1.0。この機体では個人の非商用・研究用途）
 3. `index.html` に `SERVICE_META` の 2 件・用語集（カード名の括弧の前が用語になる: 「Strata 公式版 IQ3_S」「Strata Swift 1.5」）・
    ツールチップ・Qwen の警告文・ポートの説明・ほかのカードの「GPU の排他」の文言を足した。
 4. ユニットがまだ無い間は、カードは「未導入」のまま。
+
+### 音楽・効果音生成（`audiocraft`）
+
+文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）を作る Gradio 画面（ポート 7862、systemd --user のユニット名 `audiocraft`、
+自動起動しない）。導入と使い方は `tools/audiocraft/README.md`。重みは CC-BY-NC 4.0（非商用のみ）。入口ページ側でしたことは、
+ほかの GPU サービスと同じ型:
+
+1. `SERVICES` の末尾（`comfyui` の次）に足した。`options` 無し。メモリ上限の既定値は 16 / 20 GiB（`memory_default`。
+   2026-10-27 の実測で cgroup の `memory.peak` 6.06 GiB の約 2.6 倍。根拠は `tools/audiocraft/README.md`）。
+2. `GPU_EXCLUSIVE_KEYS` と `OLLAMA_UNLOAD_BEFORE_START_KEYS` に足した（`portal.py` と `index.html` の両方。試験で一致を確認）。
+3. `index.html` に `SERVICE_META.audiocraft`・用語集（「音楽・効果音生成」「MusicGen」「AudioGen」。カード名の括弧の前が用語になる）・
+   ほかのカードの「GPU の排他」の文言・Qwen の警告文・ポートの説明を足した。
+4. `audiocraft` のユニットがまだ無い間は、カードは「未導入」のまま（ボタンは出ず、`POST /api/service/audiocraft/start` は 409）。
 
 ## 別の PC から開く
 

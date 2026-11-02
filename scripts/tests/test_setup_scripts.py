@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SETUP_TOOLS = ("comfyui", "hunyuan3d", "pixal3d", "portal", "qwen-worker", "strata")
+SETUP_TOOLS = ("audiocraft", "comfyui", "hunyuan3d", "pixal3d", "portal", "qwen-worker", "strata")
 FAKE_HOST_ADDRESS = "192.168.50.7"
 
 # 作者の機体の IP。ソース中に直書きしない（公開前の置換で壊れないよう、部品から組み立てる）。
@@ -70,7 +70,7 @@ def test_setup_script_renders_templates_instead_of_copying(tool: str) -> None:
     assert any("render_unit_file " in line for line in lines)
 
 
-@pytest.mark.parametrize("tool", ("comfyui", "hunyuan3d", "pixal3d", "portal", "strata"))
+@pytest.mark.parametrize("tool", ("audiocraft", "comfyui", "hunyuan3d", "pixal3d", "portal", "strata"))
 def test_setup_script_builds_urls_from_detected_host(tool: str) -> None:
     text = setup_script(tool).read_text(encoding="utf-8")
     assert 'source "' in text and "scripts/lib/server-host.sh" in text

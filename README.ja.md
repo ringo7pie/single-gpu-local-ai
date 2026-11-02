@@ -24,6 +24,7 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 - **VRAM に収まらない MoE のモデルを、24 GB のカードで動かす。** Strata（MoE の CPU-GPU 分担推論）を固定コミットから
   ビルドし、OpenAI 互換 API で 5 種（汎用・Coder・公式 IQ3_XXS・公式 IQ3_S・Swift 1.5）出す。
 - **複数枚の画像から 3D メッシュを作る。** Hunyuan3D-2mv（4 枚入力）と Pixal3D（1〜4 枚）、ComfyUI の防水メッシュのワークフロー。
+- **文章から作曲・効果音を作る。** AudioCraft の MusicGen Medium（作曲）と AudioGen Medium（効果音）を、入口ページから起動して使う。重みは非商用（CC-BY-NC 4.0）。
 - **クラウドの Claude Code / Codex から、機械的な実装の反復だけをローカルの Qwen へ回す。** MCP サーバー
   （qwen-worker・local-ai-bridge）。要求の整理・設計・レビューはクラウドに残す。
 - **モデルを測って比べる。** 同じ問題・同じ採点（隠しテスト）で比べ、HTML のレポートにする。2026-10-08 は 9 つの AI を 16 問で、
@@ -38,6 +39,7 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 | `tools/portal/` | ポート 8080 の入口ページ。起動・停止、GPU の排他、メモリ上限。依存なし | 不要 |
 | `tools/strata/` | MoE の CPU-GPU 分担推論（OpenAI 互換 API）。汎用版 8082・Coder 版 8083・公式版 8084・公式版 IQ3_S 8085・Swift 1.5 8086 | 要 |
 | `tools/pixal3d/` | 複数画像から 3D メッシュ（Pixal3D、7861） | 要 |
+| `tools/audiocraft/` | 文章から作曲・効果音（MusicGen / AudioGen Medium、7862）。重みは非商用 | 要 |
 | `tools/hunyuan3d/` | 4 枚の画像から 3D メッシュ（Hunyuan3D-2mv、7860）。**使用許諾の確認が要る**（下記） | 要 |
 | `tools/comfyui/` | ComfyUI と防水メッシュのワークフロー（8188）。WTiVo のネイティブ部分（CGAL・CUDA 12.6）を自前でビルドする | 要 |
 | `tools/qwen-worker/` | ローカル Qwen を Claude Code / Codex から直接使う MCP ワーカー | 不要（Ollama を呼ぶ） |
@@ -57,7 +59,7 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 | 8080 | 入口ページ（portal） | 自動起動するのはこれだけ |
 | 8081 | Open WebUI | 別途導入（このリポジトリには含めない） |
 | 8082 / 8083 / 8084 / 8085 / 8086 | Strata 汎用版 / Coder 版 / 公式版 / 公式版 IQ3_S / Swift 1.5 | 5 つは同時には載せない |
-| 7860 / 7861 | Hunyuan3D / Pixal3D | 排他 |
+| 7860 / 7861 / 7862 | Hunyuan3D / Pixal3D / AudioCraft（作曲・効果音） | 排他 |
 | 8188 | ComfyUI | 排他 |
 | 11434 | Ollama API | 127.0.0.1 のみ |
 
@@ -177,6 +179,7 @@ GPU を使わない試験は `./localai test` でまとめて走る。個別に�
   Hunyuan3D-2 へのパッチは公開していない。`tools/hunyuan3d/setup-server.sh` は `--accept-tencent-license` で
   条件を確認するまで何も取得しない。
 - **Pixal3D** は出力を収益化しない前提で運用する（NVIDIA の Source Code License・Meta の DINOv3 が混ざる）。
+- **AudioCraft** のコードは MIT だが、MusicGen / AudioGen の重みは CC-BY-NC 4.0（非商用のみ）。作った音を収益化しない前提で運用する。
 - 各社の名称・商標は権利者のもの。このリポジトリは提携も承認も受けていない。
 
 ## Claude Code で作業するとき

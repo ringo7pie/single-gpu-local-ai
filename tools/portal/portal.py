@@ -7,19 +7,20 @@
 エンドポイント:
     GET  /                                    index.html を返す（このファイルと同じディレクトリから読む）
     GET  /api/status                          GPU / Ollama / 各サービスの状態を JSON で返す
-    POST /api/service/<key>/<action>          Open WebUI・Strata（汎用版・Coder 版・公式版）・Hunyuan3D・Pixal3D・ComfyUI の
+    POST /api/service/<key>/<action>          Open WebUI・Strata（汎用版・Coder 版・公式版）・Hunyuan3D・Pixal3D・ComfyUI・
+                                               音楽・効果音生成（AudioCraft）の
                                                起動 (start) / 停止 (stop)。
                                                GET では 405。未導入の key・action 以外は 404/400。
-                                               Hunyuan3D・Pixal3D・ComfyUI・Strata（5 つとも）は GPU を同時に使えない
+                                               Hunyuan3D・Pixal3D・ComfyUI・AudioCraft・Strata（5 つとも）は GPU を同時に使えない
                                                ため、どれかの起動時に他が動いていれば自動で止めてから起動する。
-                                               Strata（5 つとも）の起動前には Ollama に載っているモデルも降ろし、
+                                               Strata（5 つとも）と AudioCraft の起動前には Ollama に載っているモデルも降ろし、
                                                応答の JSON に "unloaded_models" として入れる。
     POST /api/option/<key>/low-vram/<on|off>  低 VRAM モードの切り替え（Hunyuan3D・Pixal3D のみ）。
                                                稼働中・起動中は 409（systemd の EnvironmentFile は
                                                起動時にしか読まれないため）。GET では 405。
     POST /api/memory/<key>/<high_gib>/<max_gib>  systemd のメモリ上限（MemoryHigh / MemoryMax）を
                                                GiB 単位の整数で設定する（Open WebUI・Strata（5 つ）・
-                                               Hunyuan3D・Pixal3D・ComfyUI のみ。portal は 404）。稼働中でも再起動なしで
+                                               Hunyuan3D・Pixal3D・ComfyUI・AudioCraft のみ。portal は 404）。稼働中でも再起動なしで
                                                即座に効く。GET では 405。
 
 方針: nvidia-smi・Ollama・各ポート・各 systemd ユニット・/proc/meminfo への疎通確認はどれも
@@ -165,6 +166,17 @@ SERVICES = [
     },
     # 低 VRAM のスイッチは持たない（options 無し）。GPU の排他グループには入る（GPU_EXCLUSIVE_KEYS）。
     {"key": "comfyui", "name": "ComfyUI", "port": 8188, "unit": "comfyui"},
+    # 音楽（MusicGen Medium）と効果音（AudioGen Medium）の生成。2 つのモデルを起動時に VRAM へ載せる Gradio 画面（tools/audiocraft）。
+    # 低 VRAM のスイッチは持たない（options 無し）。メモリ上限の既定値 16 / 20 GiB は実測（2026-10-27、cgroup の memory.peak 6.06 GiB。
+    # 起動と、作曲 2 回・効果音 1 回の生成を通した値）。根拠は tools/audiocraft/README.md。GPU の排他グループに入り、
+    # 起動前に Ollama のモデルを降ろす（GPU_EXCLUSIVE_KEYS・OLLAMA_UNLOAD_BEFORE_START_KEYS）。
+    {
+        "key": "audiocraft",
+        "name": "音楽・効果音生成（AudioCraft Medium）",
+        "port": 7862,
+        "unit": "audiocraft",
+        "memory_default": {"high_gib": 16, "max_gib": 20},
+    },
 ]
 SERVICES_BY_KEY = {service["key"]: service for service in SERVICES}
 
@@ -173,16 +185,19 @@ SERVICES_BY_KEY = {service["key"]: service for service in SERVICES}
 # 3D 生成で GPU を大きく使うので、Hunyuan3D・Pixal3D と同じグループに入れる。Strata の汎用版は VRAM を約 20GB 以上、
 # RAM を約 50GB 以上、Coder 版は VRAM を大きく・RAM を約 32GB 級、公式版は汎用版と同じ程度（2026-10-07 の実測で、
 # RAM は memory.peak 50 GiB、VRAM は生成中 23,899 MiB）使うので、
-# これらとは同時に動かせない（Strata の 5 つどうしも同時には動かせない。8 つのうち同時に動くのは 1 つだけ）。
+# これらとは同時に動かせない（Strata の 5 つどうしも同時には動かせない。9 つのうち同時に動くのは 1 つだけ）。
+# AudioCraft（音楽・効果音生成）は 2 つの 1.5B モデルを VRAM に載せる（2026-10-27 の実測で待機時 約 9.8 GiB、生成中 約 10〜11 GiB）ので、同じ扱いにする。
 # 公式版 IQ3_S（strata-official-iq3s）・Swift 1.5（strata-swift）は 2026-10-16 に足した（RAM・VRAM の使い方は汎用版・公式版と同じ程度）。
 GPU_EXCLUSIVE_KEYS = ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official",
-                      "strata-official-iq3s", "strata-swift")
+                      "strata-official-iq3s", "strata-swift", "audiocraft")
 
 # 起動する前に、Ollama に載っているモデルを VRAM から降ろすサービス。Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 とも）は
 # VRAM を大きく使い、Qwen（実測 22 GiB）と同居できない。Hunyuan3D は、当て物 0001 を当てた環境では生成の直前に
 # 自分で降ろす（当て物は公開版に含まない。knowledge の hunyuan3d.md）。
 # Pixal3D・ComfyUI は、これまでの動作（画面の警告で利用者が降ろす）を変えないため対象にしない。
-OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift")
+# AudioCraft は新しいサービスなので、Strata と同じく起動前に降ろす（Qwen の 22 GiB と同居できない）。
+OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift",
+                                   "audiocraft")
 
 # POST /api/service/<key>/<action> で許可する action と、それぞれの操作の性質。
 ALLOWED_ACTIONS = ("start", "stop")
@@ -1141,7 +1156,7 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
 
         stopped_keys: list[str] = []
         if action == "start" and key in GPU_EXCLUSIVE_KEYS:
-            # Hunyuan3D・Pixal3D・ComfyUI・Strata（5 つ）は GPU を排他的に使う。起動する前に、同じグループで
+            # Hunyuan3D・Pixal3D・ComfyUI・AudioCraft・Strata（5 つ）は GPU を排他的に使う。起動する前に、同じグループで
             # 動いている（running / starting）他サービスを止める。
             states = {
                 exclusive_key: self._current_service_state(SERVICES_BY_KEY[exclusive_key])

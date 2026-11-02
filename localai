@@ -39,9 +39,9 @@ else
 fi
 
 # サービスの一覧。key はそのまま systemd の user unit 名と portal の API の key になる。
-SERVICE_KEYS=(portal open-webui strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui)
+SERVICE_KEYS=(portal open-webui strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft)
 # 起動前に ollama のモデルと他の GPU サービスを降ろす必要があるもの（tools/portal/portal.py の GPU_EXCLUSIVE_KEYS）。
-GPU_SERVICE_KEYS=(strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui)
+GPU_SERVICE_KEYS=(strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft)
 
 usage() {
   cat <<EOF
@@ -49,7 +49,7 @@ usage() {
 
   doctor                       この機体で動かせるかを点検する。NG があれば終了コード 1
   install [<名前> [引数...]]   導入。名前なしで一覧と最小の導入経路を表示する
-                               名前: portal strata pixal3d comfyui hunyuan3d qwen-worker ollama
+                               名前: portal strata pixal3d comfyui hunyuan3d audiocraft qwen-worker ollama
                                引数は tools/<名前>/setup-server.sh へそのまま渡す
                                （例: localai install strata --model coder）
   start   <サービス>           起動する
@@ -158,6 +158,7 @@ service_port() {
     hunyuan3d) echo 7860 ;;
     pixal3d) echo 7861 ;;
     comfyui) echo 8188 ;;
+    audiocraft) echo 7862 ;;
     *) echo "" ;;
   esac
 }
@@ -171,7 +172,7 @@ install_hint() {
     strata-official) echo "./localai install strata --model official" ;;
     strata-official-iq3s) echo "./localai install strata --model official-iq3s" ;;
     strata-swift) echo "./localai install strata --model swift" ;;
-    pixal3d | comfyui | hunyuan3d) echo "./localai install $1" ;;
+    pixal3d | comfyui | hunyuan3d | audiocraft) echo "./localai install $1" ;;
     open-webui) echo "Open WebUI はこのリポジトリの外にある。systemd の user unit open-webui.service を用意する（tools/portal/README.md）" ;;
     *) echo "./localai install" ;;
   esac
@@ -499,7 +500,7 @@ port_belongs_to_unit() {
 check_ports() {
   local entry port unit owner
   for entry in 8080:portal 8081:open-webui 8082:strata 8083:strata-coder 8084:strata-official \
-    8085:strata-official-iq3s 8086:strata-swift 7860:hunyuan3d 7861:pixal3d 8188:comfyui 11434:ollama
+    8085:strata-official-iq3s 8086:strata-swift 7860:hunyuan3d 7861:pixal3d 7862:audiocraft 8188:comfyui 11434:ollama
   do
     port="${entry%%:*}"
     unit="${entry#*:}"
@@ -545,7 +546,7 @@ run_doctor() {
 # ================================================================ install
 
 # 導入できるツールと、setup-server.sh の場所（リポジトリ相対）。
-INSTALL_NAMES=(portal strata pixal3d comfyui hunyuan3d qwen-worker)
+INSTALL_NAMES=(portal strata pixal3d comfyui hunyuan3d audiocraft qwen-worker)
 
 install_script_path() {
   echo "$REPO_ROOT/tools/$1/setup-server.sh"
@@ -564,6 +565,7 @@ print_install_list() {
   pixal3d      複数画像 → 3D メッシュ（7861）。約 30 GB。CUDA 12.6
   comfyui      ComfyUI と防水メッシュのワークフロー（8188）。約 16 GB。CUDA 12.6
   hunyuan3d    4 画像 → 3D メッシュ（7860）。約 23 GB。CUDA 13.2
+  audiocraft   文章 → 作曲・効果音（7862。MusicGen / AudioGen Medium）。約 14 GB。torch 同梱の CUDA 12.1。重みは非商用
   qwen-worker  ローカル Qwen を Claude Code / Codex から使う MCP ワーカー
   ollama       公式の導入手順と ollama pull を表示するだけ（実行しない）
 
@@ -856,8 +858,8 @@ run_status() {
 
 # 試験の名前（--only で選ぶ）。コマンドは CLAUDE.md の「ビルドとテスト」と各ツールの tests/ による。
 # GPU を使わないものだけを入れる。実機試験は TEST_SKIP_NAMES に理由つきで載せ、常に SKIP にする。
-TEST_NAMES=(localai portal gpu-watch-gui pixal3d hunyuan3d comfyui strata qwen-worker local-ai-bridge model-eval)
-TEST_SKIP_NAMES=(hunyuan3d-real local-ai-bridge-real)
+TEST_NAMES=(localai portal gpu-watch-gui pixal3d hunyuan3d comfyui audiocraft strata qwen-worker local-ai-bridge model-eval)
+TEST_SKIP_NAMES=(hunyuan3d-real audiocraft-real local-ai-bridge-real)
 
 # uvx の Python。tools の試験は標準ライブラリか lock の依存だけなので、版を揃えて結果を安定させる。
 TEST_PYTHON_VERSION="3.12"
@@ -870,11 +872,13 @@ test_description() {
     pixal3d) echo "Pixal3D の設定・コマンド組み立て（torch は import しない）" ;;
     hunyuan3d) echo "Hunyuan3D の設定・コマンド組み立て（標準ライブラリだけ）" ;;
     comfyui) echo "ComfyUI のワークフロー検査・メッシュ計測（numpy・scipy・trimesh）" ;;
+    audiocraft) echo "音楽・効果音生成の設定・パラメータ検証・コマンド組み立て・REST の口（偽の Engine。torch・audiocraft は import しない）" ;;
     strata) echo "Strata の設定・コマンド組み立て" ;;
     qwen-worker) echo "qwen-worker（venv があれば使い、無ければ uvx で lock の依存を入れる）" ;;
     local-ai-bridge) echo "local-ai-bridge（実機の統合試験を除く。venv があれば使い、無ければ uvx）" ;;
     model-eval) echo "model-eval の採点・集計・レポート生成" ;;
     hunyuan3d-real) echo "Hunyuan3D の実機試験（GPU と重みを使う。数分）" ;;
+    audiocraft-real) echo "音楽・効果音生成の実機試験（GPU と重みを使う。数分）" ;;
     local-ai-bridge-real) echo "local-ai-bridge の統合試験（OpenCode と Ollama の Qwen を使う）" ;;
     *) echo "" ;;
   esac
@@ -883,6 +887,7 @@ test_description() {
 test_skip_reason() {
   case "$1" in
     hunyuan3d-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop hunyuan3d のあと tools/hunyuan3d/.venv/bin/python tools/hunyuan3d/tests/test_generate_real.py" ;;
+    audiocraft-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop audiocraft のあと tools/audiocraft/.venv/bin/python tools/audiocraft/tests/test_generate_real.py" ;;
     local-ai-bridge-real) echo "OpenCode と A30 の Ollama を実際に使う。手で流す: tools/local-ai-bridge/.venv/bin/python -m pytest tools/local-ai-bridge/tests/test_integration.py -q -s" ;;
     *) echo "" ;;
   esac
@@ -999,6 +1004,10 @@ test_body() {
     hunyuan3d)
       uvx_pytest -- tools/hunyuan3d/tests/test_units.py
       ;;
+    audiocraft)
+      # REST の口の試験（test_rest.py）は fastapi と httpx（TestClient が使う）が要る。torch・gradio は要らない。
+      uvx_pytest --with fastapi --with httpx -- tools/audiocraft/tests/test_units.py tools/audiocraft/tests/test_rest.py
+      ;;
     comfyui)
       # 2 本とも走らせ、どちらかが失敗すれば失敗にする（先に落ちても後ろを試す）。
       # 最後の行に 2 本の要約を並べる（run_test_command が最後の行を結果として表示する）。
@@ -1036,6 +1045,7 @@ test_required_path() {
     gpu-watch-gui) echo "tools/gpu-watch-gui/tests/test_units.py" ;;
     pixal3d) echo "tools/pixal3d/tests/test_units.py" ;;
     hunyuan3d) echo "tools/hunyuan3d/tests/test_units.py" ;;
+    audiocraft) echo "tools/audiocraft/tests/test_units.py" ;;
     comfyui) echo "tools/comfyui/tests/test_units.py" ;;
     strata) echo "tools/strata/tests" ;;
     qwen-worker) echo "tools/qwen-worker/tests" ;;

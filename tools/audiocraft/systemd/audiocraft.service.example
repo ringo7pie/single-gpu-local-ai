@@ -1,0 +1,34 @@
+[Unit]
+Description=AudioCraft (MusicGen / AudioGen medium, gradio, port 7862)
+# Ollama と VRAM を食い合うので、Ollama のユニットには依存させない（入口ページ tools/portal が起動前に
+# Ollama のモデルを降ろす）。GPU を使うほかのサービスとも同時には載せない。Conflicts= により、こちらを
+# start すると systemd がほかの 8 つを止める（逆も同じ。Conflicts= は双方向に効く）。
+Conflicts=hunyuan3d.service pixal3d.service comfyui.service strata.service strata-coder.service strata-official.service strata-official-iq3s.service strata-swift.service
+# Conflicts= だけでは止める順番が決まらない。2 つの間に順序の関係（After= か Before= のどちらか一方）があれば、
+# systemd は停止の job を起動の job より先に行う（systemd.unit の Conflicts=）。順序は一方向の鎖
+# （こちらがほかの 8 つの後ろ）にして、ほかの 8 つのユニットの側には After=audiocraft.service を書かない（両側に書くと順序が輪になる）。
+After=network.target hunyuan3d.service pixal3d.service comfyui.service strata.service strata-coder.service strata-official.service strata-official-iq3s.service strata-swift.service
+
+[Service]
+Type=simple
+# リポジトリのパスは、setup-server.sh が雛形の印をこの機体の絶対パスに置き換えて書く（scripts/lib/render-unit.sh）。手で写すときは自分で置き換える。
+WorkingDirectory=@REPO_ROOT@/tools/audiocraft
+# ACRAFT_MUSIC_MODEL / ACRAFT_SOUND_MODEL（使うモデルの差し替え）を読む。先頭の "-" はファイルが無くても
+# エラーにしない意味（pixal3d.service / hunyuan3d.service の EnvironmentFile と同じ型）。
+EnvironmentFile=-%h/.config/audiocraft/audiocraft.env
+ExecStart=@REPO_ROOT@/tools/audiocraft/run-audiocraft serve
+Restart=on-failure
+RestartSec=5
+# 2 つのモデル（各約 1.5B）の重みの読み込みに 1〜数分かかる（冷えたディスクキャッシュではさらに長い）。
+TimeoutStartSec=600
+# RAM の安全弁。上限に当たったサービスだけがカーネルに落とされ、デスクトップは巻き込まれない。
+# 既定は MemoryHigh=16G / MemoryMax=20G。2026-10-27 の実測で、起動（2 モデルの読み込み）と作曲 2 回・効果音 1 回の生成を通した
+# cgroup の memory.peak が 6.06 GiB（起動直後 5.46 GiB）。重みは GPU へ載せたあと RAM をあまり使わないので、約 2.6 倍の余裕を見る。
+# 入口ページの共通の既定（44 / 48）のままだと、リークしたときにデスクトップの側から先に苦しくなる。
+# 運用中の値は入口ページ（tools/portal）から変える。変えた値は systemctl set-property の
+# drop-in（~/.config/systemd/user.control/）に入り、このファイルの値より優先される。
+MemoryHigh=16G
+MemoryMax=20G
+
+[Install]
+WantedBy=default.target

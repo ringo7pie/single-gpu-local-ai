@@ -10,6 +10,7 @@
 | 8081 | Open WebUI | `open-webui` | 起動しない |
 | 7860 | Hunyuan3D | `hunyuan3d` | 起動しない |
 | 7861 | Pixal3D | `pixal3d` | 起動しない |
+| 7862 | 音楽・効果音生成（AudioCraft。`areas/audiocraft.md`） | `audiocraft` | 起動しない |
 | 8188 | ComfyUI | `comfyui` | 起動しない |
 | 11434 | Ollama API | `ollama`（system） | 起動する |
 

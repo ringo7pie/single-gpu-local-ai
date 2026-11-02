@@ -374,7 +374,7 @@
 
   <footer>
     5 秒ごとに自動更新します。各サービスへのリンクはこのページを開いたホスト名を使って組み立てます。
-    Open WebUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・Hunyuan3D・Pixal3D・ComfyUI は<span class="term" data-term="自動起動">自動起動</span>しません。使うときだけ「起動」ボタンで立ち上げてください
+    Open WebUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・Hunyuan3D・Pixal3D・ComfyUI・音楽・効果音生成は<span class="term" data-term="自動起動">自動起動</span>しません。使うときだけ「起動」ボタンで立ち上げてください
     （各サービスは<span class="term" data-term="systemd user ユニット">systemd user ユニット</span>として動きます）。
     起動・停止・設定変更の通信には内部ヘッダ（<span class="term" data-term="X-Portal-Request">X-Portal-Request</span>）を必須にし、
     他サイトからの誤操作を防いでいます。各カードの「<span class="term" data-term="ポート">ポート</span> nnnn」はそのサービスの待受番号です。
@@ -393,9 +393,9 @@
   const TOOLTIPS = {
     startButton:
       "このサービスを起動します（systemctl --user start）。起動には数秒〜数分かかることがあり、" +
-      "その間は「起動中…」と表示されます。Hunyuan3D・Pixal3D・ComfyUI・Strata・Strata Flash-Next Coder・Strata 公式版・" +
+      "その間は「起動中…」と表示されます。Hunyuan3D・Pixal3D・ComfyUI・音楽・効果音生成・Strata・Strata Flash-Next Coder・Strata 公式版・" +
       "Strata 公式版 IQ3_S・Strata Swift 1.5 は GPU（VRAM）を" +
-      "同時に使えないため、どれかを起動すると動いている他のサービスは自動で停止します。Strata の 5 つはさらに、" +
+      "同時に使えないため、どれかを起動すると動いている他のサービスは自動で停止します。Strata の 5 つと音楽・効果音生成はさらに、" +
       "起動の前に Ollama に載っているモデルも VRAM から降ろします。",
     stopButton:
       "このサービスを停止します（systemctl --user stop）。停止すると VRAM・RAM を解放します。" +
@@ -419,7 +419,7 @@
       "自動で戻すことはできないため、必要なら押す前に控えておいてください。",
     badgeRunning: "ポートが実際に開いていて、すぐ使える状態です。",
     badgeStarting:
-      "systemd 上は動作中ですが、ポートはまだ開いていません。Hunyuan3D・Pixal3D・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）はモデルの" +
+      "systemd 上は動作中ですが、ポートはまだ開いていません。Hunyuan3D・Pixal3D・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）はモデルの" +
       "読み込みに数十秒〜数分かかるため、この表示がしばらく続くことがあります。",
     badgeStopped: "ユニットは動いていません。「起動」ボタンで起動できます。",
     badgeNotInstalled:
@@ -445,7 +445,7 @@
     "VRAM":
       "GPU（グラフィックボード）に載っている専用メモリ。A30 1 枚の VRAM は 24576 MiB（24 GiB）です。" +
       "Qwen（qwen3.8:27b）を単独で載せると実測 22201 MiB を使い、Hunyuan3D は待機時だけで約 5,365 MiB、" +
-      "Pixal3D は生成のピークで約 17,337 MiB を使い、Strata の汎用版は約 20 GiB 以上、Coder 版・公式版・公式版 IQ3_S・Swift 1.5 も大きく使います。" +
+      "Pixal3D は生成のピークで約 17,337 MiB、音楽・効果音生成は待機時 約 9.8 GiB を使い、Strata の汎用版は約 20 GiB 以上、Coder 版・公式版・公式版 IQ3_S・Swift 1.5 も大きく使います。" +
       "A30 は 1 枚しか無いため、使う量の合計が 24 GiB を超えると動きません。",
     "RAM":
       "主記憶（メインメモリ）。この機体は実測 62.5 GiB（/proc/meminfo の MemTotal 65504276 kB）です。" +
@@ -463,7 +463,7 @@
     "Ollama":
       "Qwen を動かしている推論サーバー。127.0.0.1:11434 で待ち受け、LAN には公開していません。" +
       "無操作が続くと既定 5 分でモデルを VRAM から降ろし、次のリクエストで再度読み込む" +
-      "（約 60 秒かかる）ため、直後の応答速度は当てになりません。Strata（5 つとも）を起動するときは、" +
+      "（約 60 秒かかる）ため、直後の応答速度は当てになりません。Strata（5 つとも）と音楽・効果音生成を起動するときは、" +
       "入口ページが先にここへ載っているモデルを降ろします。",
     "Open WebUI":
       "Ollama（Qwen）を使うブラウザチャット画面。ポート 8081 で動きます。Strata のモデルも、" +
@@ -510,18 +510,31 @@
       "責任を持ちます。",
     "Hunyuan3D":
       "正面・背面・左・右の画像 4 枚から 3D メッシュを作るツール（ポート 7860）。起動すると VRAM を" +
-      "約 5,365 MiB（待機時）使います。Pixal3D・ComfyUI・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは GPU を同時に使えず、どれかの起動時に" +
+      "約 5,365 MiB（待機時）使います。Pixal3D・ComfyUI・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは GPU を同時に使えず、どれかの起動時に" +
       "動いている他のサービスは自動で停止します。",
     "Pixal3D":
       "画像 1〜4 枚から 3D メッシュを作る、Hunyuan3D とは別方式のツール（ポート 7861）。VRAM ピークは" +
       "実測約 17,337 MiB。低 VRAM モードを Off にすると VRAM 不足で生成に失敗するため常時 On が必須です。" +
-      "Hunyuan3D・ComfyUI・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは GPU を同時に使えません。",
+      "Hunyuan3D・ComfyUI・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは GPU を同時に使えません。",
     "ComfyUI":
       "ノードをつないだワークフローで生成を行う UI（ポート 8188）。ここでは PixelArtistry の" +
       "ワークフロー（Pixal3D / TRELLIS.2 + WTiVo + LODTailor）で、1 枚の画像から水密（watertight）" +
       "メッシュや低ポリのゲーム用アセットを作ります。3D 生成で GPU を大きく使うため、Hunyuan3D・" +
-      "Pixal3D・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えず、どれかの起動時に動いている他のサービスは自動で" +
+      "Pixal3D・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えず、どれかの起動時に動いている他のサービスは自動で" +
       "停止します。起動・停止・メモリ上限の変更はこの画面から行えます。",
+    "音楽・効果音生成":
+      "文章（説明文）から、作曲と効果音を作るツール（ポート 7862）。Meta の AudioCraft で、作曲は MusicGen Medium（1.5B）、" +
+      "効果音は AudioGen Medium（1.5B）です。起動すると 2 つのモデルを VRAM へ載せます（待機時 約 9.8 GiB、生成中 約 10〜11 GiB）。" +
+      "重みがメモリのキャッシュに載っていれば、使えるまで 15 秒ほどです（2026-10-27 の実測）。" +
+      "説明文は英語で書きます（日本語だと精度が大きく落ちます）。モデルの重みは CC-BY-NC 4.0（非商用のみ）なので、" +
+      "作った音を収益化する用途には使えません。Hunyuan3D・Pixal3D・ComfyUI・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは" +
+      "同時に使えず、起動するときは、動いている他のサービスを停止し、Ollama に載っているモデルも降ろします。",
+    "MusicGen":
+      "Meta の AudioCraft にある、文章から音楽を作るモデル。ここでは Medium（1.5B、32 kHz・モノラル）を使い、" +
+      "長さは 1〜30 秒です。歌声は上手く作れません。重みは CC-BY-NC 4.0（非商用のみ）です。",
+    "AudioGen":
+      "Meta の AudioCraft にある、文章から効果音・環境音を作るモデル。ここでは Medium（1.5B、16 kHz・モノラル）を使い、" +
+      "長さは 1〜20 秒です（10 秒を超える分は前の音をつないで延ばします）。重みは CC-BY-NC 4.0（非商用のみ）です。",
     "低 VRAM モード":
       "Hunyuan3D・Pixal3D が VRAM の使用量を RAM と引き換えに減らす設定。既定は On です。稼働中・" +
       "起動中は変更できません（systemd の EnvironmentFile は起動時にしか読まれないため）。Pixal3D は" +
@@ -529,10 +542,10 @@
       "RAM が 20 GiB 近くまで伸び、OOM killer に殺されてデスクトップごとハングした事故があったため、" +
       "ユニット側の MemoryHigh/MemoryMax でも保護しています。",
     "GPU の排他":
-      "Hunyuan3D・Pixal3D・ComfyUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5 の 8 つは A30 1 枚の VRAM を同時に使えません" +
-      "（同時に動くのは 8 つのうち 1 つだけ）。そのため、どれかを起動すると、" +
+      "Hunyuan3D・Pixal3D・ComfyUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・音楽・効果音生成 の 9 つは A30 1 枚の VRAM を同時に使えません" +
+      "（同時に動くのは 9 つのうち 1 つだけ）。そのため、どれかを起動すると、" +
       "他のサービスが動いていれば（稼働中・起動中）自動的に先に停止してから起動します。停止に失敗した" +
-      "場合は、同時に立ち上がって RAM が枯れるのを防ぐため起動を中止します。Strata の 5 つはさらに、起動の前に" +
+      "場合は、同時に立ち上がって RAM が枯れるのを防ぐため起動を中止します。Strata の 5 つと音楽・効果音生成はさらに、起動の前に" +
       "Ollama に載っているモデル（Qwen など）も VRAM から降ろします（降ろせなくても起動は続け、注意を表示します）。",
     "MemoryHigh":
       "systemd --user ユニットの cgroup メモリ制御の 1 つ。これを超えると、そのサービスは cgroup に" +
@@ -553,13 +566,13 @@
       "まだ無いサービスは「未導入」と表示され、この画面から起動・停止・メモリ上限の操作ができません。",
     "自動起動":
       "PC 起動時に自動で立ち上がるかどうか。この構成では入口ページ（portal）だけが自動起動します。" +
-      "Open WebUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・Hunyuan3D・Pixal3D・ComfyUI は常時起動しておくと待機中でも" +
+      "Open WebUI・Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・Hunyuan3D・Pixal3D・ComfyUI・音楽・効果音生成は常時起動しておくと待機中でも" +
       "VRAM・RAM を占有しかねず、実際に PC がハングした経緯があるため、使うときだけこの画面から手動で起動する" +
       "運用にしています。",
     "ポート":
       "サービスが待ち受ける TCP の番号。入口ページは 8080、Open WebUI は 8081、Strata は 8082、" +
       "Strata Flash-Next Coder は 8083、Strata 公式版は 8084、Strata 公式版 IQ3_S は 8085、Strata Swift 1.5 は 8086、" +
-      "Hunyuan3D は 7860、Pixal3D は 7861、ComfyUI は 8188 を使います。" +
+      "Hunyuan3D は 7860、Pixal3D は 7861、音楽・効果音生成は 7862、ComfyUI は 8188 を使います。" +
       "各サービスへのリンクはこの番号とページを開いたホスト名から組み立てます。",
     "X-Portal-Request":
       "起動・停止・設定変更の POST に必須の独自ヘッダです。ヘッダの無い単純な POST は他サイトの" +
@@ -639,7 +652,7 @@
       startingReason: "モデル（約 83GB）を読み込んでいます（数分かかります）。",
       note: "チャットは Open WebUI（8081）のモデル一覧から選びます。Strata が停止中のときは、選べないかエラーになります。"
         + " Ollama のモデルは、Strata の起動時に降ろされます。"
-        + " GPU の排他: Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " GPU の排他: Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D・音楽・効果音生成 とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " VRAM を約 20GB 以上、RAM を約 50GB 以上使います。",
       openLabel: STRATA_OPEN_LINKS.openLabel,
       openTooltip: STRATA_OPEN_LINKS.openTooltip,
@@ -652,7 +665,7 @@
       startingReason: "モデルを読み込んでいます（数分かかります）。",
       note: "チャットは Open WebUI（8081）のモデル一覧から選びます。Strata Flash-Next Coder が停止中のときは、選べないかエラーになります。"
         + " Ollama のモデルは、Strata Flash-Next Coder の起動時に降ろされます。"
-        + " GPU の排他: 汎用の Strata・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " GPU の排他: 汎用の Strata・Strata 公式版・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D・音楽・効果音生成 とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " RAM を約 36GiB、VRAM を大きく使います。日本語は実用になりません（日本語は汎用の Strata を使ってください）。画像入力は未対応です。",
       openLabel: STRATA_OPEN_LINKS.openLabel,
       openTooltip: STRATA_OPEN_LINKS.openTooltip,
@@ -666,7 +679,7 @@
       startingReason: "モデルを読み込んでいます（数分かかります）。",
       note: "チャットは Open WebUI（8081）のモデル一覧（strata-official:IQ3_XXS）から選びます。Strata 公式版が停止中のときは、選べないかエラーになります。"
         + " Ollama のモデルは、Strata 公式版の起動時に降ろされます。"
-        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版 IQ3_S・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D・音楽・効果音生成 とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " RAM は汎用の Strata と同じく約 50GiB、VRAM は生成中にほぼ全部（23,899 MiB）を使います（2026-10-07 の実測）。",
       openLabel: STRATA_OPEN_LINKS.openLabel,
       openTooltip: STRATA_OPEN_LINKS.openTooltip,
@@ -680,7 +693,7 @@
       startingReason: "モデルを読み込んでいます（数分かかります）。",
       note: "チャットは Open WebUI（8081）のモデル一覧（strata-official:IQ3_S）から選びます。Strata 公式版 IQ3_S が停止中のときは、選べないかエラーになります。"
         + " Ollama のモデルは、Strata 公式版 IQ3_S の起動時に降ろされます。"
-        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版・Strata Swift 1.5・ComfyUI・Hunyuan3D・Pixal3D・音楽・効果音生成 とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " RAM は汎用の Strata と同じく約 50GiB、VRAM は生成中にほぼ全部（23,902 MiB）を使います（2026-10-17 の実測）。",
       openLabel: STRATA_OPEN_LINKS.openLabel,
       openTooltip: STRATA_OPEN_LINKS.openTooltip,
@@ -694,7 +707,7 @@
       startingReason: "モデルを読み込んでいます（数分かかります）。",
       note: "チャットは Open WebUI（8081）のモデル一覧（strata-swift:IQ3_XXS）から選びます。Strata Swift 1.5 が停止中のときは、選べないかエラーになります。"
         + " Ollama のモデルは、Strata Swift 1.5 の起動時に降ろされます。"
-        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・ComfyUI・Hunyuan3D・Pixal3D とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " GPU の排他: 汎用の Strata・Strata Flash-Next Coder・Strata 公式版・Strata 公式版 IQ3_S・ComfyUI・Hunyuan3D・Pixal3D・音楽・効果音生成 とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " RAM は Strata 公式版と同じく約 50GiB、VRAM は生成中にほぼ全部（23,900 MiB）を使います（2026-10-17 の実測）。日本語の短い質問にも自然に答えました。",
       openLabel: STRATA_OPEN_LINKS.openLabel,
       openTooltip: STRATA_OPEN_LINKS.openTooltip,
@@ -710,7 +723,7 @@
       description: "画像 1〜4 枚から 3D メッシュを生成（別方式）",
       stoppedReason: "起動していません。下のボタンから起動できます。",
       startingReason: "モデルを読み込んでいます（数分かかります）。",
-      note: "GPU の排他: Hunyuan3D・ComfyUI・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+      note: "GPU の排他: Hunyuan3D・ComfyUI・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " 生成中は RAM を 28GB 前後まで使い swap へあふれます（実測）。"
         + " ほかの重いアプリを閉じてから使ってください。生成は 4 分ほどかかります。"
     },
@@ -719,8 +732,18 @@
         "PixelArtistry のワークフロー（ノードをつないで生成する UI）",
       stoppedReason: "起動していません。下のボタンから起動できます。",
       startingReason: "起動処理中です。まもなく利用できるようになります。",
-      note: "GPU の排他: Hunyuan3D・Pixal3D・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+      note: "GPU の排他: Hunyuan3D・Pixal3D・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
         + " 3D 生成で GPU を大きく使います。"
+    },
+    "audiocraft": {
+      description: "文章（説明文）から作曲（MusicGen Medium）と効果音（AudioGen Medium）を作る。説明文は英語で書く",
+      stoppedReason: "起動していません。下のボタンから起動できます。",
+      startingReason: "モデル 2 つを読み込んでいます（重みがキャッシュにあれば 15 秒ほど。ディスクから読むときはもっとかかります）。",
+      note: "GPU の排他: Hunyuan3D・Pixal3D・ComfyUI・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
+        + " Ollama のモデルは、音楽・効果音生成の起動時に降ろされます。"
+        + " 画面を使わず API でも使えます（POST /api/v1/music・/api/v1/sound に JSON を送ると wav が返ります。認証なし）。"
+        + " VRAM は約 10 GiB（待機時 9.8 GiB、生成中 10〜11 GiB）、RAM は約 6 GiB 使います。作曲は 10 秒で約 10 秒、効果音は 5 秒で約 5 秒かかります（2026-10-27 の実測）。"
+        + " モデルの重みは CC-BY-NC 4.0（非商用のみ）です。作った音を収益化する用途には使えません。"
     }
   };
 
@@ -762,11 +785,11 @@
   // GPU を排他的に使うサービス。portal.py の GPU_EXCLUSIVE_KEYS と同じ組み合わせ。
   // 起動ボタンを押したときに「もう片方を止めてよいか」を確認するために使う
   // （実際に止めるかどうかの最終判断はサーバー側が行う。ここは確認ダイアログの文言のためだけ）。
-  const GPU_EXCLUSIVE_KEYS = ["hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift"];
+  const GPU_EXCLUSIVE_KEYS = ["hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft"];
 
   // 起動前に Ollama のモデルを降ろすサービス。portal.py の OLLAMA_UNLOAD_BEFORE_START_KEYS と同じ組み合わせ。
   // 実際に降ろすのはサーバー側。ここは確認ダイアログに、降ろされるモデル名を出すためだけ。
-  const OLLAMA_UNLOAD_BEFORE_START_KEYS = ["strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift"];
+  const OLLAMA_UNLOAD_BEFORE_START_KEYS = ["strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft"];
 
   function servicesToStopBeforeStart(key, servicesList) {
     if (GPU_EXCLUSIVE_KEYS.indexOf(key) === -1) { return []; }
@@ -867,7 +890,7 @@
         gpuWarning.hidden = false;
         setTextWithGlossaryTerms(
           gpuWarning,
-          "Qwen（" + names + "）が VRAM を使っています。Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）は起動時に自動で降ろします。" +
+          "Qwen（" + names + "）が VRAM を使っています。Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と音楽・効果音生成は起動時に自動で降ろします。" +
             "Hunyuan3D・Pixal3D・ComfyUI を起動する前には Qwen を降ろす必要があります。"
         );
       } else {

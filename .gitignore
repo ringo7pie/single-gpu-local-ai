@@ -61,6 +61,15 @@ tools/pixal3d/models/
 tools/pixal3d/outputs/
 tools/pixal3d/fixtures/
 
+# audiocraft（音楽・効果音生成）の仮想環境・上流ソース・モデルの重み・生成物・作業ログ。
+# いずれも大きいか絶対パスを埋め込むため持ち運べない。
+# 再作成: tools/audiocraft/setup-server.sh
+tools/audiocraft/.venv/
+tools/audiocraft/vendor/
+tools/audiocraft/models/
+tools/audiocraft/outputs/
+tools/audiocraft/logs/
+
 # qwen-model-bench の結合ツール（llama.cpp のビルド済みバイナリ）と、GGUF の取り込み作業ファイル。
 # 作業ファイルは数十〜百 GB になり、取り込みが終われば消える。
 # 結合ツールの入れ方: tools/qwen-model-bench/README.md

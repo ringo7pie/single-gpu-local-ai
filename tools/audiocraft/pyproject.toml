@@ -1,0 +1,13 @@
+[project]
+name = "acraft"
+version = "0.1.0"
+description = "AudioCraft（MusicGen / AudioGen）をこの A30 サーバーで動かすための CLI と画面"
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["acraft"]

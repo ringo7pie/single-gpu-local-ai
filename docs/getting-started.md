@@ -83,10 +83,12 @@ GPU の使用量・Ollama のモデル・各サービスの状態と「起動」
 ./localai install pixal3d                                  # MIT。出力を収益化しない前提
 ./localai install hunyuan3d --accept-tencent-license       # 下の注意を読んでから
 ./localai install comfyui
+./localai install audiocraft                               # 文章から作曲・効果音。重みは非商用（CC-BY-NC 4.0）
 ```
 
 - 同時に載せられるのは 1 つ。入口ページか `./localai start <名前>` で起動すると、動いているほうは自動で止まる。
   ただし Ollama のモデルは、3D 生成・ComfyUI の起動前には自分で降ろす（入口ページの案内に従う）。
+  Strata と AudioCraft（作曲・効果音）は、入口ページが Ollama のモデルを自動で降ろす。
 - **Hunyuan3D の使用許諾**: EU・UK・韓国は対象外。`--accept-tencent-license` を付けるまで何も取得しない。
   公開版にはパッチを含めないため、画面の説明・設定の保存・失敗パラメータの表示は使えない
   （[tools/hunyuan3d/README.md](../tools/hunyuan3d/README.md)）。

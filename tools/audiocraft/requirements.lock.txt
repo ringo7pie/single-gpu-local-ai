@@ -1,0 +1,37 @@
+# AudioCraft（固定コミット 896ec7c47f5e5d1e5aa1e4b260c4405328bf009d）の推論と、acraft の画面に要る依存。
+# torch / torchaudio / torchvision は index が別（cu121）なので、ここには書かない。setup-server.sh の
+# [3/8] で --index-url https://download.pytorch.org/whl/cu121 を付けて入れる（torch 2.1.0 は上流が厳密に固定している）。
+#
+# 上流の requirements.txt（torch==2.1.0 / torchaudio<2.1.2 / torchvision==0.16.0 / xformers<0.0.23 / numpy<2 など）を
+# 推論に要るものだけに絞り、2026-10-27 に Python 3.11 の venv へ実際に入れた版で固定した。
+# 上流との差:
+#   - av は 12.0.0。上流の 11.0.0 には cp311 の wheel が無く、ソースからのビルドに ffmpeg の開発ヘッダが要る
+#     （この機体には無く、sudo も使えない）。av は音声ファイルの読み込みにしか使わず、文章からの生成では呼ばれない。
+#   - spacy は上流どおり 3.7.6、transformers は 4.46.0。どちらも PyPI で yanked 扱いだが、固定すれば入る
+#     （spacy は文章の分割だけ、transformers は T5 の符号化だけに使う）。
+#   - pesq / pystoi / demucs / dora-search / treetable は入れない（学習・評価用。生成の経路では import されない）。
+#   - gradio は 5.33.0（tools/hunyuan3d と同じ版）。
+# xformers 0.0.22.post7 は cu121 でビルドされた cp311 の wheel が PyPI にある。上流の transformer.py が
+# 先頭で無条件に import するので、無いと audiocraft.modules が import できない。
+numpy==1.26.4
+av==12.0.0
+einops==0.8.2
+flashy==0.0.2
+hydra-core==1.3.8
+hydra-colorlog==1.2.0
+julius==0.2.8
+num2words==0.5.14
+sentencepiece==0.2.2
+spacy==3.7.6
+huggingface-hub==0.36.2
+tqdm==4.70.1
+transformers==4.46.0
+xformers==0.0.22.post7
+librosa==0.11.0
+soundfile==0.14.0
+torchmetrics==1.9.0
+encodec==0.1.1
+protobuf==7.36.2
+torchtext==0.16.0
+torchdiffeq==0.2.5
+gradio==5.33.0

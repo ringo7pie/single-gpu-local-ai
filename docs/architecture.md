@@ -21,24 +21,25 @@ flowchart LR
     strata["Strata :8082〜8086<br/>MoE の CPU-GPU 分担推論"]
     h3d["Hunyuan3D :7860"]
     p3d["Pixal3D :7861"]
+    audio["AudioCraft :7862<br/>作曲・効果音"]
     comfy["ComfyUI :8188"]
     gpu[("A30 24 GiB")]
   end
 
   browser --> portal
-  portal -- "systemctl --user" --> webui & strata & h3d & p3d & comfy
-  portal -- "Strata の起動前にモデルを降ろす" --> ollama
+  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & comfy
+  portal -- "Strata・AudioCraft の起動前にモデルを降ろす" --> ollama
   browser --> webui
   webui --> ollama & strata
   cloud -- "MCP" --> bridge["local-ai-bridge<br/>qwen-worker"]
   other -- "SSH" --> bridge
   bridge --> ollama
-  ollama & strata & h3d & p3d & comfy --> gpu
+  ollama & strata & h3d & p3d & audio & comfy --> gpu
 ```
 
-- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI も重みを載せる）。
-  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata の起動前に
-  自動で降ろす。3D 生成・ComfyUI を起動する前は、画面の案内に従って Ollama のモデルを降ろす。
+- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI・AudioCraft も重みを載せる）。
+  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata と AudioCraft の
+  起動前に自動で降ろす。3D 生成・ComfyUI を起動する前は、画面の案内に従って Ollama のモデルを降ろす。
 - 入口ページ以外のサービスは systemd の user unit で、`enable` しない（自動起動は入口ページだけ）。
   理由は、3D 生成の低 VRAM モードが重みを CPU 側に置いて RAM を使い切り、デスクトップごと固まった経験による。
 
@@ -67,6 +68,7 @@ flowchart LR
 | Strata | MoE の専門家を CPU と GPU に分担させる推論エンジン（OpenAI 互換 API）。VRAM に収まらない大きな MoE を動かす | 汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 の 5 種（ポートが別、同時には載せない） |
 | Hunyuan3D / Pixal3D | 4 枚の画像から 3D メッシュ | 重みと VRAM を食い合うため排他 |
 | ComfyUI | 水密なメッシュ（ゲーム用アセット）への変換 | ネイティブ部分（CGAL・CUDA 12.6）を自前でビルド |
+| AudioCraft | 文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）。Gradio 画面（7862） | 2 つのモデルを VRAM に載せるため排他。重みは非商用（CC-BY-NC 4.0）。古い torch 2.1.0 系の専用 venv（Python 3.11・CUDA 12.1 同梱） |
 
 Strata の設定は起動のたびに `tools/strata/stra/config.py` の `ModelSpec` と環境変数から作り直される。画面の Settings で
 変えた値は次の起動で消える。思考の予算（`STRATA_REASONING_BUDGET_TOKENS`）などは環境変数で変える。

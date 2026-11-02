@@ -28,6 +28,7 @@ this project is not affiliated with or endorsed by them.
 | Open WebUI | [open-webui/open-webui](https://github.com/open-webui/open-webui) | BSD-3-Clause をもとにした独自ライセンス（ブランド表示の保持条項を含む） | 別途導入する。同梱しない。導入時に原文を確認すること |
 | Hunyuan3D-2 | [Tencent-Hunyuan/Hunyuan3D-2](https://github.com/Tencent-Hunyuan/Hunyuan3D-2) `f8db6309` | **Tencent Hunyuan 3D 2.0 Community License**（下の「地域制限」） | `tools/hunyuan3d`。Tencent の NOTICE 表示を README に載せる |
 | Pixal3D | [TencentARC/Pixal3D](https://github.com/TencentARC/Pixal3D) `f7cf3842` | MIT（Copyright (c) 2026 Tencent） | `tools/pixal3d` |
+| AudioCraft | [facebookresearch/audiocraft](https://github.com/facebookresearch/audiocraft) `896ec7c4`（2025-03-13 の main の先頭） | コードは MIT（Copyright (c) Meta Platforms, Inc. and affiliates） | `tools/audiocraft`。音楽（MusicGen）・効果音（AudioGen）の生成。重みのライセンスは下の §3 |
 | TRELLIS.2 | [microsoft/TRELLIS.2](https://github.com/microsoft/TRELLIS.2) `75fbf018` | MIT（Copyright (c) Microsoft Corporation） | Pixal3D の環境・ComfyUI のノードが使う |
 | CuMesh・FlexGEMM | [JeffreyXiang](https://github.com/JeffreyXiang)（ComfyUI 側は visualbruno の fork） | MIT（Copyright (c) 2025 Jianfeng Xiang） | CUDA 拡張。ソースからビルドする |
 | nvdiffrast | [NVlabs/nvdiffrast](https://github.com/NVlabs/nvdiffrast) `v0.4.0` | NVIDIA Source Code License（1-Way Commercial） | **非商用が中心**。大規模な商用利用は NVIDIA との別途の合意が要る |
@@ -51,6 +52,8 @@ this project is not affiliated with or endorsed by them.
 | Gemma 4 系（e4b・31b） | Google | Gemma の利用規約と禁止利用ポリシー |
 | Hunyuan3D-2mv・Hunyuan3D-2 | [tencent](https://huggingface.co/tencent) | Tencent Hunyuan 3D 2.0 Community License |
 | Pixal3D | [TencentARC/Pixal3D](https://huggingface.co/TencentARC/Pixal3D) | MIT |
+| MusicGen Medium・AudioGen Medium | [facebook/musicgen-medium](https://huggingface.co/facebook/musicgen-medium)・[facebook/audiogen-medium](https://huggingface.co/facebook/audiogen-medium)（Meta） | **CC-BY-NC 4.0（非商用のみ）**。HF のモデルカードの表示。上流の `LICENSE_weights` も同じ |
+| T5（t5-base。文章の符号化器） | [google-t5/t5-base](https://huggingface.co/google-t5/t5-base) | Apache-2.0（配布元の表示）。AudioCraft が文章を符号化するのに使う |
 | DINOv3 | Meta（`camenduru/dinov3-vitl16-pretrain-lvd1689m` は非公式ミラー） | Meta 独自のライセンス。**ミラーを使ってもライセンスは Meta のものに従う。地域制限の有無は上流でも未回答** |
 | 背景除去（BiRefNet） | [ZhengPeng7/BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) | MIT。RMBG-2.0（CC BY-NC 4.0）は使わない |
 
@@ -64,6 +67,8 @@ this project is not affiliated with or endorsed by them.
   Tencent Hunyuan 3D 2.0 is licensed under the Tencent Hunyuan 3D 2.0 Community License Agreement, Copyright © 2025 Tencent. All Rights Reserved. The trademark rights of “Tencent Hunyuan” are owned by Tencent or its affiliate.
 - **Pixal3D の出力は収益化しない前提**: nvdiffrast・nvdiffrec（非商用が中心）と DINOv3（Meta 独自）が推論経路に混ざる。
   収益化するなら Hunyuan3D 側（上の地域制限に従う）を検討する。
+- **AudioCraft の重みは非商用**: MusicGen・AudioGen の重みは CC-BY-NC 4.0。コード（MIT）と重みのライセンスは別で、
+  作った音を収益化する用途には使えない。個人の試作・研究・社内の検討に限る。
 - **GPL**: ComfyUI（GPL-3.0）と WTiVo（GPL-3.0 / CGAL）は同梱しないが、取得・ビルドした物を第三者へ配布するときは GPL に従う。
 
 ## 5. 評価の記録に含まれるモデルの出力

@@ -22,6 +22,7 @@
 | Strata（5 種のどれか 1 つ） | 要 | 空きをエキスパートのキャッシュに使う | **64 GB 級**（汎用版はエキスパート 53.3 GiB。resident モードで 40.56 GiB を RAM に固定） | 約 100 GB（汎用版のモデル 約 89 GB + MTP 約 5 GB。公式版 IQ3_XXS +47 GB、公式版 IQ3_S +55 GB、Swift 1.5 +76 GB、Coder +58 GB） | 13.2（engine を sm_80 でビルド） |
 | Pixal3D | 要 | 低 VRAM モードあり | 大（低 VRAM モードは重みを CPU 側に置く） | 約 30 GB | 12.6 |
 | Hunyuan3D | 要 | 低 VRAM モードあり | 大 | 約 23 GB（形状のみなら約 5 GB） | 13.2 |
+| AudioCraft（MusicGen・AudioGen の Medium 2 つ） | 要 | 2 つの 1.5B モデルを常駐。待機時 約 9.8 GiB、生成中 約 10〜11 GiB（2026-10-27 の実測。上流の文書は Medium に 16 GB 以上の GPU を推奨） | 小（cgroup の memory.peak 6.06 GiB） | 約 14 GB（重みと T5 約 8.2 GB + venv 約 5.5 GB） | wheel に同梱（12.1。システムの CUDA Toolkit は使わない） |
 | ComfyUI + 防水メッシュ | 要 | — | WTiVo の処理で最大約 40 GiB | 重み 約 16 GB + torch | 12.6（WTiVo のビルド） |
 | qwen-worker・local-ai-bridge | 不要（Ollama を呼ぶ） | — | 小 | 小 | — |
 
