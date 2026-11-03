@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ CALIBRATE_SCRIPT = GUI_DIR / "calibrate-power.py"
 
 sys.path.insert(0, str(GUI_DIR))
 
-from gpu_watch_gui import fan_offset, model, tapo_feed  # noqa: E402  (sys.path 設定の後に import する)
+from gpu_watch_gui import fan_offset, hang_watchdog, model, tapo_feed, tapo_vault  # noqa: E402  (sys.path 設定の後に import する)
 
 
 def _load_calibrate_power_module():
@@ -877,3 +878,430 @@ def test_tapo_feed_classify_exit():
 def test_tapo_feed_reader_available_reports_missing_venv(tmp_path):
     available, reason = tapo_feed.reader_available(tmp_path / "no" / "python")
     assert available is False and "setup-tapo.sh" in reason
+
+
+# ---------------------------------------------------------------------------
+# ファン補正スライダーの保存値（起動時に戻す）
+# ---------------------------------------------------------------------------
+
+
+def test_fan_preference_round_trip_and_private_file(tmp_path):
+    path = tmp_path / "state" / "fan-offset.json"
+    fan_offset.save_preference(path, 12.6)
+    assert fan_offset.load_preference(path) == 13
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 1, "offset": 13}
+    assert (path.stat().st_mode & 0o777) == 0o600
+    fan_offset.save_preference(path, -20)
+    assert fan_offset.load_preference(path) == -20
+    assert [entry.name for entry in path.parent.iterdir()] == ["fan-offset.json"]
+
+
+def test_fan_preference_missing_or_broken_gives_zero(tmp_path):
+    assert fan_offset.load_preference(tmp_path / "none.json") == 0
+    for content in ("garbage", "[1, 2]", "{}", '{"offset": "10"}', '{"offset": null}', '{"offset": true}',
+                    '{"offset": NaN}', '{"offset": Infinity}'):
+        broken = tmp_path / "broken.json"
+        broken.write_text(content, encoding="utf-8")
+        assert fan_offset.load_preference(broken) == 0, content
+
+
+def test_fan_preference_out_of_range_is_clamped(tmp_path):
+    path = tmp_path / "fan-offset.json"
+    path.write_text('{"offset": 999}', encoding="utf-8")
+    assert fan_offset.load_preference(path) == 50
+    path.write_text('{"offset": -999}', encoding="utf-8")
+    assert fan_offset.load_preference(path) == -50
+
+
+def test_fan_preference_save_failure_raises_oserror_and_cleans_up(tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(OSError):
+        fan_offset.save_preference(blocker / "fan-offset.json", 5)
+    assert [entry.name for entry in tmp_path.iterdir()] == ["not-a-directory"]
+
+
+def test_fan_preference_is_a_different_file_from_the_one_fan_host_reads():
+    # 補正ファイル（fan_host.py が読む。10 秒で古いと見なされる）と、保存値（次の起動まで残す）は別物。
+    app_source = (GUI_DIR / "gpu_watch_gui" / "app.py").read_text(encoding="utf-8")
+    assert 'FAN_PREFERENCE_FILE = STATE_DIR / "fan-offset.json"' in app_source
+    assert fan_offset.DEFAULT_PATH.name == "offset.json"
+
+
+# ---------------------------------------------------------------------------
+# Tapo の自動ログイン（TPM 2.0 に封印して state/tapo.cred に保存）
+# ---------------------------------------------------------------------------
+
+
+def test_tapo_feed_auto_login_retry_delays_are_few_and_increasing():
+    delays = [tapo_feed.auto_login_retry_delay(failures) for failures in range(6)]
+    assert delays == [30, 60, 120, None, None, None]
+    assert tapo_feed.auto_login_retry_delay(-1) is None
+
+
+class FakeCreds:
+    """systemd-creds の代わり。encrypt は入力を反転して base64 にし、decrypt はその逆をする。
+    本物の暗号ではない（試験で TPM を使わないための差し替え）。"""
+
+    def __init__(self, decrypt_returncode=0, decrypt_output=None, encrypt_returncode=0):
+        self.calls = []
+        self._decrypt_returncode = decrypt_returncode
+        self._decrypt_output = decrypt_output
+        self._encrypt_returncode = encrypt_returncode
+
+    def __call__(self, argv, input=None, capture_output=True, timeout=None, check=False):
+        import base64
+        self.calls.append((list(argv), input))
+        if argv[1] == "encrypt":
+            if self._encrypt_returncode:
+                return subprocess.CompletedProcess(argv, self._encrypt_returncode, b"", b"Failed to create TPM2 context\nPermission denied\n")
+            return subprocess.CompletedProcess(argv, 0, base64.b64encode(input[::-1]) + b"\n", b"")
+        if self._decrypt_returncode:
+            return subprocess.CompletedProcess(argv, self._decrypt_returncode, b"", b"Failed to unseal secret: Policy check failed\n")
+        if self._decrypt_output is not None:
+            return subprocess.CompletedProcess(argv, 0, self._decrypt_output, b"")
+        return subprocess.CompletedProcess(argv, 0, base64.b64decode(input)[::-1], b"")
+
+
+@pytest.fixture
+def fake_creds_command(monkeypatch):
+    monkeypatch.setattr(tapo_vault.shutil, "which", lambda name: "/usr/bin/systemd-creds")
+
+
+def test_tapo_vault_argv_uses_only_the_tpm_key_and_a_fixed_name():
+    encrypt = tapo_vault.encrypt_argv("/usr/bin/systemd-creds")
+    assert encrypt[:2] == ["/usr/bin/systemd-creds", "encrypt"]
+    assert "--with-key=tpm2" in encrypt  # host+tpm2（既定）は root だけが読む鍵も要るので、mt では使えない
+    assert f"--name={tapo_vault.CREDENTIAL_NAME}" in encrypt
+    decrypt = tapo_vault.decrypt_argv("/usr/bin/systemd-creds")
+    assert decrypt[:2] == ["/usr/bin/systemd-creds", "decrypt"]
+    assert f"--name={tapo_vault.CREDENTIAL_NAME}" in decrypt
+    assert encrypt[-2:] == ["-", "-"] and decrypt[-2:] == ["-", "-"]  # 標準入力→標準出力。ファイルを経由しない
+
+
+def test_tapo_vault_payload_round_trip_with_awkward_password():
+    password = "pa ss\"w\\ord\'\u3042 \n x"
+    assert tapo_vault.decode_payload(tapo_vault.encode_payload("a@example.com", password)) == ("a@example.com", password)
+
+
+def test_tapo_vault_decode_rejects_bad_payloads():
+    for bad in (b"", b"not json", b"[1]", b"{}", b'{"username": "a"}', b'{"username": "", "password": "x"}',
+                b'{"username": "a", "password": 5}', b"\xff\xfe"):
+        with pytest.raises(tapo_vault.VaultError):
+            tapo_vault.decode_payload(bad)
+
+
+def test_tapo_vault_seal_and_unseal_round_trip(tmp_path, fake_creds_command):
+    sealed_path = tmp_path / "state" / "tapo.cred"
+    runner = FakeCreds()
+    tapo_vault.seal("a@example.com", "Secret-Pass-123", sealed_path, runner)
+    assert tapo_vault.has_sealed(sealed_path)
+    assert (sealed_path.stat().st_mode & 0o777) == 0o600
+    assert [entry.name for entry in sealed_path.parent.iterdir()] == ["tapo.cred"]  # 一時ファイルを残さない
+    assert b"Secret-Pass-123" not in sealed_path.read_bytes()  # 平文でディスクに書かない
+    assert tapo_vault.unseal(sealed_path, runner) == ("a@example.com", "Secret-Pass-123")
+
+
+def test_tapo_vault_password_goes_only_through_stdin(tmp_path, fake_creds_command):
+    runner = FakeCreds()
+    tapo_vault.seal("a@example.com", "Secret-Pass-123", tmp_path / "tapo.cred", runner)
+    tapo_vault.unseal(tmp_path / "tapo.cred", runner)
+    for argv, _input in runner.calls:
+        assert not any("Secret-Pass-123" in argument for argument in argv)
+    encrypt_input = runner.calls[0][1]
+    assert b"Secret-Pass-123" in encrypt_input  # 渡す先は標準入力だけ
+
+
+def test_tapo_vault_seal_removes_the_file_when_verification_does_not_match(tmp_path, fake_creds_command):
+    sealed_path = tmp_path / "tapo.cred"
+    wrong = tapo_vault.encode_payload("a@example.com", "different")
+    with pytest.raises(tapo_vault.VaultError, match="一致しません"):
+        tapo_vault.seal("a@example.com", "Secret-Pass-123", sealed_path, FakeCreds(decrypt_output=wrong))
+    assert not sealed_path.exists()  # 読み戻せない暗号文を残さない
+
+
+def test_tapo_vault_seal_removes_the_file_when_it_cannot_be_decrypted_back(tmp_path, fake_creds_command):
+    sealed_path = tmp_path / "tapo.cred"
+    with pytest.raises(tapo_vault.VaultError, match="封印後の確認"):
+        tapo_vault.seal("a@example.com", "Secret-Pass-123", sealed_path, FakeCreds(decrypt_returncode=1))
+    assert not sealed_path.exists()
+
+
+def test_tapo_vault_failure_message_has_last_stderr_line_but_never_the_password(tmp_path, fake_creds_command):
+    sealed_path = tmp_path / "tapo.cred"
+    with pytest.raises(tapo_vault.VaultError) as raised:
+        tapo_vault.seal("a@example.com", "Secret-Pass-123", sealed_path, FakeCreds(encrypt_returncode=1))
+    assert "Permission denied" in str(raised.value)
+    assert "Secret-Pass-123" not in str(raised.value)
+    assert not sealed_path.exists()
+
+
+def test_tapo_vault_seal_replaces_an_earlier_one(tmp_path, fake_creds_command):
+    sealed_path = tmp_path / "tapo.cred"
+    runner = FakeCreds()
+    tapo_vault.seal("a@example.com", "first", sealed_path, runner)
+    tapo_vault.seal("b@example.com", "second", sealed_path, runner)
+    assert tapo_vault.unseal(sealed_path, runner) == ("b@example.com", "second")
+
+
+def test_tapo_vault_unseal_missing_file_is_none_and_failures_are_vault_errors(tmp_path, fake_creds_command):
+    assert tapo_vault.unseal(tmp_path / "none.cred", FakeCreds()) is None
+    sealed_path = tmp_path / "tapo.cred"
+    sealed_path.write_bytes(b"AAAA")
+    with pytest.raises(tapo_vault.VaultError, match="Policy check failed"):
+        tapo_vault.unseal(sealed_path, FakeCreds(decrypt_returncode=1))  # PCR が変わった等で復号できない
+    def timing_out(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 30)
+    with pytest.raises(tapo_vault.VaultError, match="終わりませんでした"):
+        tapo_vault.unseal(sealed_path, timing_out)
+    def cannot_start(argv, **kwargs):
+        raise FileNotFoundError("no such command")
+    with pytest.raises(tapo_vault.VaultError, match="起動できません"):
+        tapo_vault.unseal(sealed_path, cannot_start)
+
+
+def test_tapo_vault_clear_is_idempotent(tmp_path):
+    sealed_path = tmp_path / "tapo.cred"
+    sealed_path.write_bytes(b"x")
+    tapo_vault.clear(sealed_path)
+    assert not sealed_path.exists()
+    tapo_vault.clear(sealed_path)  # 無くても例外にしない
+
+
+def test_tapo_vault_unavailable_reason(tmp_path):
+    device = tmp_path / "tpmrm0"
+    device.write_bytes(b"")
+    assert tapo_vault.unavailable_reason(device, lambda name: "/usr/bin/systemd-creds") is None
+    assert "systemd-creds がありません" in tapo_vault.unavailable_reason(device, lambda name: None)
+    reason = tapo_vault.unavailable_reason(tmp_path / "missing-device", lambda name: "/usr/bin/systemd-creds")
+    assert "usermod -aG tss" in reason  # 開けないときは、直し方を案内する
+
+
+def test_tapo_vault_sealed_file_lives_in_the_git_ignored_state_dir():
+    assert tapo_vault.SEALED_FILE == GUI_DIR / "state" / "tapo.cred"
+    ignore = subprocess.run(["git", "check-ignore", "-q", str(tapo_vault.SEALED_FILE)], cwd=GUI_DIR, check=False)
+    assert ignore.returncode in (0, 128)  # 0: 無視される。128: git の外で実行された（CI の展開先など）
+
+
+def test_login_flow_never_writes_the_password_to_the_profile_file():
+    # state/tapo.json（IP とメールアドレス）を書く関数は、パスワードを引数に取らない。パスワードの保存先は封印だけ。
+    import inspect
+    assert "password" not in inspect.signature(tapo_feed.save_profile).parameters
+
+
+# ---------------------------------------------------------------------------
+# ハングの見張り（hang_watchdog.py）
+# ---------------------------------------------------------------------------
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _make_watchdog(tmp_path, clock, exits, notes=None, **overrides):
+    """見張りのスレッドが勝手に判定しない（確認の間隔を 1 時間にする）ので、試験から 1 回ずつ動かせる。"""
+    def collector(process_id, log_file):
+        if notes is not None:
+            notes.append((process_id, log_file.name))
+        return "C スタックの代わりの印"
+
+    options = dict(
+        hang_exit_sec=30.0, check_interval_sec=3600.0, clock=clock, exit_function=exits.append,
+        native_collector=collector, use_faulthandler=False,
+    )
+    options.update(overrides)
+    return hang_watchdog.HangWatchdog(tmp_path / "state" / "hang.log", **options)
+
+
+def test_hang_watchdog_gdb_argv_takes_only_a_batch_backtrace():
+    argv = hang_watchdog.build_gdb_argv("/usr/bin/gdb", 4242)
+    assert argv[:3] == ["/usr/bin/gdb", "-p", "4242"]
+    for required in ("-batch", "-nx", "set debuginfod enabled off", "thread apply all bt"):
+        assert required in argv
+    assert not any("full" in argument for argument in argv)  # bt full は局所変数（パスワード等）を出す
+
+
+def test_hang_watchdog_stall_detection_follows_beats(tmp_path):
+    clock, exits = FakeClock(), []
+    watchdog = _make_watchdog(tmp_path, clock, exits)
+    assert watchdog.start() is True
+    try:
+        clock.now = 29.9
+        assert watchdog.is_stalled() is False
+        clock.now = 30.0
+        assert watchdog.is_stalled() is True
+        watchdog.beat()  # tick が戻った
+        clock.now = 59.0
+        assert watchdog.is_stalled() is False
+        assert watchdog.stalled_seconds() == pytest.approx(29.0)
+    finally:
+        watchdog.stop()
+    assert exits == []  # 判定しただけでは終了しない
+
+
+def test_hang_watchdog_handle_hang_writes_log_and_exits_with_75(tmp_path):
+    clock, exits, notes = FakeClock(), [], []
+    watchdog = _make_watchdog(tmp_path, clock, exits, notes)
+    watchdog.start()
+    clock.now = 42.0
+    watchdog.handle_hang()
+    watchdog.stop()
+    assert exits == [75] == [hang_watchdog.EXIT_HANG]
+    log_text = (tmp_path / "state" / "hang.log").read_text(encoding="utf-8")
+    assert "---- 起動" in log_text and "---- ハング検出" in log_text
+    assert "42 秒途切れた" in log_text
+    assert "-- Python のスタック" in log_text and "hang_watchdog.py" in log_text
+    assert "-- C スタックの代わりの印" in log_text
+    assert "終了コード 75" in log_text
+    assert notes and notes[0][0] == os.getpid() and notes[0][1].endswith("hang.log")
+
+
+def test_hang_watchdog_thread_detects_a_stall_but_not_a_beating_loop(tmp_path):
+    import threading
+    exited = threading.Event()
+    codes = []
+
+    def record_exit(code):
+        codes.append(code)
+        exited.set()
+
+    watchdog = hang_watchdog.HangWatchdog(
+        tmp_path / "hang.log", hang_exit_sec=0.4, check_interval_sec=0.05, exit_function=record_exit,
+        native_collector=lambda process_id, log_file: "stub", use_faulthandler=False,
+    )
+    assert watchdog.start() is True
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:  # 拍動している間は、しきい値（0.4 秒）を超えても終了しない
+        watchdog.beat()
+        time.sleep(0.05)
+    assert not exited.is_set()
+    assert exited.wait(timeout=5.0), "拍動が止まっても終了しなかった"  # 止める
+    assert codes == [75]
+    watchdog.stop()
+
+
+def test_hang_watchdog_start_fails_quietly_when_the_log_cannot_be_opened(tmp_path):
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    watchdog = hang_watchdog.HangWatchdog(blocker / "hang.log", use_faulthandler=False)
+    assert watchdog.start() is False
+    watchdog.beat()  # 使えなくても呼べる
+    watchdog.stop()
+
+
+def test_hang_watchdog_stop_is_idempotent_and_ends_the_thread(tmp_path):
+    clock, exits = FakeClock(), []
+    watchdog = _make_watchdog(tmp_path, clock, exits, check_interval_sec=0.05)
+    watchdog.start()
+    watchdog.stop()
+    watchdog.stop()
+    watchdog.beat()
+    assert exits == []
+
+
+def test_hang_watchdog_timers_outlast_the_gdb_wait():
+    # 最後の砦（faulthandler のタイマー）は、見張りの判定と gdb の待ち時間より長くしないと、
+    # gdb の途中でプロセスが終わってしまう。
+    assert hang_watchdog.LAST_RESORT_SEC > hang_watchdog.HANG_EXIT_SEC + hang_watchdog.GDB_TIMEOUT_SEC
+
+
+def test_hang_watchdog_without_gdb_still_writes_a_note(monkeypatch, tmp_path):
+    monkeypatch.setattr(hang_watchdog.shutil, "which", lambda name: None)
+    with open(tmp_path / "x.log", "w", encoding="utf-8") as log_file:
+        note = hang_watchdog.collect_native_stack(os.getpid(), log_file)
+    assert "gdb が無い" in note
+
+
+# ---------------------------------------------------------------------------
+# 起動スクリプト（run-gpu-watch-gui）の起動し直し
+# ---------------------------------------------------------------------------
+
+LAUNCHER = GUI_DIR / "run-gpu-watch-gui"
+
+
+def _prepare_launcher(tmp_path, app_source):
+    """スクリプトを一時ディレクトリへ写し、偽の gpu_watch_gui.app（app_source）を置く。"""
+    shutil.copy(LAUNCHER, tmp_path / "run-gpu-watch-gui")
+    package = tmp_path / "gpu_watch_gui"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "app.py").write_text(app_source, encoding="utf-8")
+    return tmp_path / "run-gpu-watch-gui"
+
+
+def _run_launcher(script, min_run_sec, restart_delay_sec, timeout_sec=30):
+    environment = dict(
+        os.environ, GPU_WATCH_GUI_MIN_RUN_SEC=str(min_run_sec), GPU_WATCH_GUI_RESTART_DELAY_SEC=str(restart_delay_sec),
+    )
+    return subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, timeout=timeout_sec, env=environment, check=False,
+    )
+
+
+FAKE_APP_HEADER = (
+    "import os, sys, time\n"
+    "runs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'runs.txt')\n"
+    "open(runs_file, 'a').write('start\\n')\n"
+    "runs = open(runs_file).read().count('start')\n"
+)
+
+
+def test_launcher_restarts_after_a_hang_exit_then_stops_on_clean_exit(tmp_path):
+    script = _prepare_launcher(tmp_path, FAKE_APP_HEADER + (
+        "if runs == 1:\n    time.sleep(2)\n    sys.exit(75)\n"
+        "sys.exit(0)\n"
+    ))
+    result = _run_launcher(script, min_run_sec=1, restart_delay_sec=1)
+    assert result.returncode == 0
+    assert (tmp_path / "runs.txt").read_text(encoding="utf-8").count("start") == 2
+    assert "終了コード 75" in result.stderr and "起動し直す" in result.stderr
+
+
+def test_launcher_does_not_loop_on_a_quick_failure(tmp_path):
+    script = _prepare_launcher(tmp_path, FAKE_APP_HEADER + "sys.exit(1)\n")
+    result = _run_launcher(script, min_run_sec=30, restart_delay_sec=1)
+    assert result.returncode == 1
+    assert (tmp_path / "runs.txt").read_text(encoding="utf-8").count("start") == 1
+    assert "起動し直さない" in result.stderr
+
+
+def test_launcher_does_not_restart_after_the_window_was_closed(tmp_path):
+    script = _prepare_launcher(tmp_path, FAKE_APP_HEADER + "time.sleep(2)\nsys.exit(0)\n")
+    result = _run_launcher(script, min_run_sec=1, restart_delay_sec=1)
+    assert result.returncode == 0
+    assert (tmp_path / "runs.txt").read_text(encoding="utf-8").count("start") == 1
+
+
+def test_launcher_forwards_sigterm_to_the_window_and_stops(tmp_path):
+    import signal
+    script = _prepare_launcher(tmp_path, FAKE_APP_HEADER + "time.sleep(60)\n")
+    environment = dict(os.environ, GPU_WATCH_GUI_MIN_RUN_SEC="1", GPU_WATCH_GUI_RESTART_DELAY_SEC="1")
+    launcher = subprocess.Popen(["bash", str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+    runs_file = tmp_path / "runs.txt"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not runs_file.exists():
+        time.sleep(0.05)
+    assert runs_file.exists()
+    launcher.send_signal(signal.SIGTERM)
+    try:
+        launcher.wait(timeout=10)
+    finally:
+        if launcher.poll() is None:
+            launcher.kill()
+    assert runs_file.read_text(encoding="utf-8").count("start") == 1  # 起動し直していない
+    child = subprocess.run(["pgrep", "-f", str(tmp_path / "gpu_watch_gui")], capture_output=True, text=True, check=False)
+    assert child.stdout.strip() == ""  # 窓の python が残っていない
+
+
+def test_launcher_rejects_non_integer_timings(tmp_path):
+    script = _prepare_launcher(tmp_path, FAKE_APP_HEADER)
+    result = _run_launcher(script, min_run_sec="abc", restart_delay_sec=1)
+    assert result.returncode == 2 and "整数" in result.stderr
+
+
+def test_launcher_passes_bash_syntax_check():
+    assert subprocess.run(["bash", "-n", str(LAUNCHER)], check=False).returncode == 0

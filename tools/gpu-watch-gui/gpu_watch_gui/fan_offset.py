@@ -56,3 +56,38 @@ def clear_offset(path: Path) -> None:
         path.unlink()
     except OSError:
         pass
+
+
+def load_preference(path: Path) -> int:
+    """前回のスライダーの値（起動時に戻す）。無い・壊れている・形が違うときは 0（自動カーブそのまま）。
+
+    fan_host.py へ渡す補正ファイル（write_offset）とは別のファイル。あちらは 10 秒で古いと見なされて 0 に戻るが、
+    こちらは次の起動まで残す。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        value = data["offset"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if value != value or value in (float("inf"), float("-inf")):  # NaN・無限大
+        return 0
+    return clamp_offset(value)
+
+
+def save_preference(path: Path, offset: float) -> None:
+    """スライダーの値を保存する。一時ファイル→rename で書き、途中の壊れた JSON を残さない。
+    失敗は OSError のまま呼び出し側へ返す。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        descriptor = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"version": FORMAT_VERSION, "offset": clamp_offset(offset)}, handle)
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise

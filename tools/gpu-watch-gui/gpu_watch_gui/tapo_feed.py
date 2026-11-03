@@ -1,8 +1,11 @@
 """Tapo の読み取り役（tapo_power.py）を GPU Watch から使うための、GTK 非依存の部品。
 
-パスワードはどこにも保存しない。ログイン画面で受け取った値は GPU Watch のメモリにだけ置き、
-読み取り役の標準入力（1 行の JSON）で渡す。ファイルに残すのは IP とメールアドレスだけ
-（state/tapo.json。次回のログイン画面の初期値にするため。パスワードは含めない）。
+パスワードはファイル・環境変数・コマンドライン引数に置かない。ログイン画面で受け取った値は GPU Watch の
+メモリに置き、読み取り役の標準入力（1 行の JSON）で渡す。
+ファイル（state/tapo.json）に残すのは IP とメールアドレスだけ（次回のログイン画面の初期値と、自動ログインの接続先。
+パスワードは含めない）。
+再起動後もログインを保つため、ログイン画面で「保存する」を選んだときに限り、パスワードをこの PC の TPM 2.0 に
+封印して（暗号化して）state/tapo.cred に置く（gpu_watch_gui.tapo_vault。2026-11-03 のユーザー判断）。
 """
 from __future__ import annotations
 
@@ -10,7 +13,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 GUI_DIR = Path(__file__).resolve().parent.parent
 READER_SCRIPT = GUI_DIR / "tapo_power.py"
@@ -19,6 +22,10 @@ DEFAULT_PYTHON = Path.home() / ".local" / "share" / "tapo-meter" / ".venv" / "bi
 # 機種・IP・メールアドレスは機械ごとの値なので git 管理外の state/ に置く。
 PROFILE_FILE = GUI_DIR / "state" / "tapo.json"
 DEFAULT_INTERVAL_SEC = 5.0
+# 保存分を復号して取った資格情報で、最初の 1 回が読めなかったときの試し直しの間隔（秒）。起動直後でネットワークが
+# まだ使えない場合に備える。回数を絞るのは、誤ったパスワードで試し続けて機器側に制限されるのを避けるため。
+# 使い切ったらログイン画面を出す（保存分は消さない）。
+AUTO_LOGIN_RETRY_DELAYS_SEC = (30, 60, 120)
 
 # tapo_power.py の終了コードと揃える（試験で一致を確認する）
 EXIT_BAD_CREDENTIALS = 3
@@ -73,6 +80,13 @@ def save_profile(host: str, username: str, path: Path = PROFILE_FILE) -> None:
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump({"host": host, "username": username}, handle, ensure_ascii=False, indent=2)
     os.replace(temporary, path)
+
+
+def auto_login_retry_delay(previous_failures: int) -> Optional[int]:
+    """自動ログインが previous_failures 回失敗した後、次に試すまでの秒数。使い切ったら None。"""
+    if 0 <= previous_failures < len(AUTO_LOGIN_RETRY_DELAYS_SEC):
+        return AUTO_LOGIN_RETRY_DELAYS_SEC[previous_failures]
+    return None
 
 
 def classify_exit(exit_code: int) -> str:

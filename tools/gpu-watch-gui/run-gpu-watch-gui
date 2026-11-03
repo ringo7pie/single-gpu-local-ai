@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
 # gpu-watch.sh の値を見る小さな常駐ウィンドウ（GTK4）を起動する。
 # venv は作らない。依存ゼロでシステムの python3 + python3-gi（GTK4）をそのまま使う。
+#
+# 窓が固まった（ハング検出で終了コード 75）・強制終了された（137 など）ときは、起動し直す。
+# 起動し直さないとき: 終了コード 0（窓を閉じた・SIGTERM）、30 秒未満で終わったとき（起動直後の失敗で回り続けない）、
+# このスクリプト自身が SIGTERM/SIGINT/SIGHUP を受けたとき。
+# 止めたままにしたいときは、窓を閉じるか、このスクリプト（run-gpu-watch-gui）を先に止める。
+# 窓の python だけを kill -KILL すると、5 秒後に起動し直される。
 set -euo pipefail
+
+# 環境変数は試験用（実機では既定のまま使う）。整数の秒だけ受け付ける。
+readonly MIN_RUN_SEC="${GPU_WATCH_GUI_MIN_RUN_SEC:-30}"
+readonly RESTART_DELAY_SEC="${GPU_WATCH_GUI_RESTART_DELAY_SEC:-5}"
+case "${MIN_RUN_SEC}x${RESTART_DELAY_SEC}x" in
+  *[!0-9x]* | x* | *xx*)
+    echo "run-gpu-watch-gui: GPU_WATCH_GUI_MIN_RUN_SEC / GPU_WATCH_GUI_RESTART_DELAY_SEC は整数の秒で指定してください" >&2
+    exit 2
+    ;;
+esac
 
 GUI_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
@@ -11,4 +27,48 @@ if [ ! -x /usr/bin/python3 ]; then
 fi
 
 export PYTHONPATH="$GUI_DIR${PYTHONPATH:+:$PYTHONPATH}"
-exec /usr/bin/python3 -m gpu_watch_gui.app "$@"
+
+child_pid=""
+stopping=0
+
+# 受けた終了要求は子（窓）へ渡し、窓が終わった後は起動し直さない。
+forward_signal() {
+  stopping=1
+  if [ -n "$child_pid" ]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+  fi
+}
+trap forward_signal TERM INT HUP
+
+while true; do
+  started_at=$SECONDS
+  /usr/bin/python3 -m gpu_watch_gui.app "$@" &
+  child_pid=$!
+
+  # trap が走ると wait は途中で戻る。子がまだ生きているなら待ち直し、終了コードは子が終わった回で取る。
+  exit_code=0
+  while true; do
+    wait "$child_pid" && exit_code=0 || exit_code=$?
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      break
+    fi
+  done
+  child_pid=""
+  run_sec=$((SECONDS - started_at))
+
+  if [ "$stopping" -eq 1 ] || [ "$exit_code" -eq 0 ]; then
+    exit "$exit_code"
+  fi
+  if [ "$run_sec" -lt "$MIN_RUN_SEC" ]; then
+    echo "run-gpu-watch-gui: ${run_sec} 秒で終了コード ${exit_code} で終わったので、起動し直さない" >&2
+    exit "$exit_code"
+  fi
+
+  echo "run-gpu-watch-gui: 終了コード ${exit_code}（${run_sec} 秒動いた）。${RESTART_DELAY_SEC} 秒後に起動し直す" >&2
+  sleep "$RESTART_DELAY_SEC" &
+  sleep_pid=$!
+  wait "$sleep_pid" || true
+  if [ "$stopping" -eq 1 ]; then
+    exit "$exit_code"
+  fi
+done

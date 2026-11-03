@@ -8,6 +8,7 @@
 書き込みはファン補正スライダーだけ。A30 ファンの自動カーブへの加減（-50〜+50）を
 gpu_watch_gui.fan_offset のファイルへ 1 秒ごとに書き、a30-fan.service の fan_host.py が読む。
 補正が 0 のときはファイルを置かない。窓を閉じるとファイルを消す。
+スライダーの値は state/fan-offset.json にも保存し、次の起動で戻す（窓を閉じている間の補正は 0 = 自動）。
 
 GTK を import するのはこのファイルだけ（model.py は GTK 非依存の純 Python）。
 子プロセスの stdout は GLib の非同期読み（Gio.Subprocess + Gio.DataInputStream.read_line_async）
@@ -16,28 +17,42 @@ GTK を import するのはこのファイルだけ（model.py は GTK 非依存
 
 PC 全体の電力は、Tapo スマートプラグ（P110M）の実測を出せる。ログイン画面（「Tapo」ボタン）で TP-Link ID と
 パスワードを受け取り、読み取り役 tapo_power.py（専用 venv の python）を子プロセスとして起動して標準入力で渡す。
-パスワードはファイルに保存せず、このプロセスのメモリにだけ置く。実測が取れない間は推定に戻す。
+パスワードはファイル・環境変数・コマンドライン引数に置かず、このプロセスのメモリに置く。
+ログイン画面で「保存する」を選ぶと、最初の実測が取れた時点で、この PC の TPM 2.0 に封印（暗号化）して
+state/tapo.cred に保存し、次の起動からはログイン画面を出さずに自動でログインする（gpu_watch_gui.tapo_vault）。
+実測が取れない間は推定に戻す。
+
+窓が固まったときの診断と自動復旧は gpu_watch_gui.hang_watchdog、起動し直しは run-gpu-watch-gui が行う。
+描画は GL を使わない（Cairo）。固まった原因が GL レンダラーだったため（下の環境変数の設定を参照）。
 
 起動方法は run-gpu-watch-gui を使う（システムの /usr/bin/python3 を使い、venv は作らない）。
 """
 from __future__ import annotations
 
 import argparse
-import faulthandler
 import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Optional
 
-import gi
+# GTK の GL レンダラーを使わない（gi を import する前に決める。GTK は初期化のときに読む）。
+# 2026-11-03 に常駐中の窓が固まった。gdb で採った C スタックでは、メインスレッドが
+# gsk_renderer_render → Mesa（libgallium、Intel iris）の中の futex で待ち続けていた。
+# 窓は小さく更新も 1 秒ごとなので、ソフトウェア描画（Cairo）で負荷は問題にならない。
+# setdefault なので、GL と比べたいときは環境変数（GSK_RENDERER=gl など）で上書きできる。
+os.environ.setdefault("GSK_RENDERER", "cairo")
+os.environ.setdefault("GDK_DEBUG", "gl-disable")
+
+import gi  # noqa: E402  (環境変数の設定より後に import する)
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402  (gi.require_version の後に import する)
 
-from gpu_watch_gui import fan_offset, model, tapo_feed
+from gpu_watch_gui import fan_offset, hang_watchdog, model, tapo_feed, tapo_vault
 from gpu_watch_gui.model import AlertEvent, GpuWatchModel, load_level, plain_level, temp_level
 
 APP_ID = "jp.localai.GpuWatchGui"
@@ -48,11 +63,12 @@ CALIBRATE_SCRIPT = GUI_DIR / "calibrate-power.py"
 # JSON は stdout 経由で受け取り、保存はここ（非 root のこのプロセス）が行う。
 STATE_DIR = GUI_DIR / "state"
 CALIBRATION_FILE = STATE_DIR / "calibration.json"
+# ファン補正スライダーの前回の値。次の起動で戻す。
+FAN_PREFERENCE_FILE = STATE_DIR / "fan-offset.json"
 
-# メインループが止まったとき（ハング）の診断。1 秒ごとの tick が HANG_DUMP_SEC 秒途切れたら、
-# 全スレッドの Python スタックをこのファイルに追記する。書くのは関数名・行番号だけで、値（パスワード等）は含まない。
+# メインループが止まったとき（ハング）の診断。仕組みは gpu_watch_gui.hang_watchdog に書いてある。
+# 書くのは関数名・行番号・アドレスだけで、値（パスワード等）は含まない。
 HANG_LOG_FILE = STATE_DIR / "hang-traceback.log"
-HANG_DUMP_SEC = 20
 RESTART_DELAY_SEC = 5
 CALIBRATE_DONE_DISPLAY_SEC = 5
 FAILURE_DISPLAY_SEC = 15  # 失敗の理由は読めるよう長めに残す（全文はツールチップ）
@@ -63,7 +79,8 @@ LEVEL_CSS_CLASSES = ("level-critical", "level-warning", "level-ok", "level-unkno
 FAN_OFFSET_SCALE_MIN_WIDTH = 60  # 窓が横に伸びないよう、スライダーは「現在」「最大」の 2 列に収まる幅にする
 FAN_OFFSET_TOOLTIP = (
     "A30 ファンの自動カーブへの加減（%ポイント）。結果は 30〜100% に収まる。\n"
-    "GPU 70℃ 以上では下げ側（マイナス）は無視される。GPU Watch を閉じると 0（自動）に戻る。\n"
+    "GPU 70℃ 以上では下げ側（マイナス）は無視される。GPU Watch を閉じている間は 0（自動）で、\n"
+    "次に起動すると前回の値に戻る。\n"
     "実際の PWM はファンの行で確認する"
 )
 
@@ -107,6 +124,10 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
                         metavar="PATH",
                         help="ファン補正値を書くファイル。既定は fan_host.py が読む場所。"
                              "試験で別インスタンスが本番の補正を消さないよう分けるためのもの")
+    parser.add_argument("--fan-preference-file", dest="fan_preference_file", default=str(FAN_PREFERENCE_FILE),
+                        metavar="PATH",
+                        help="ファン補正スライダーの前回の値を保存するファイル。既定は state/fan-offset.json。"
+                             "試験で別インスタンスが本番の保存値を書き換えないよう分けるためのもの")
     parser.add_argument("--tapo", choices=("auto", "off"), default="auto",
                         help="PC 全体の実測に Tapo を使う。auto は起動時にログイン画面を出す。既定 auto")
     parser.add_argument("--tapo-host", dest="tapo_host", default="", metavar="IP",
@@ -147,6 +168,21 @@ def notify_critical(summary: str, body: str) -> None:
         )
     except OSError:
         pass
+
+
+def run_in_background(work, on_done) -> None:
+    """時間のかかる処理（TPM の呼び出し。数百ミリ秒）を別スレッドで行い、結果をメインループで
+    on_done(結果, 問題の説明 or None) へ渡す。メインスレッドを止めない。"""
+    def target() -> None:
+        try:
+            result, problem = work(), None
+        except tapo_vault.VaultError as error:
+            result, problem = None, str(error)
+        except Exception as error:  # 想定外でも落とさず、理由だけ返す
+            result, problem = None, f"{type(error).__name__}: {error}"
+        GLib.idle_add(lambda: (on_done(result, problem), GLib.SOURCE_REMOVE)[1])
+
+    threading.Thread(target=target, name="tapo-vault", daemon=True).start()
 
 
 def format_fan_offset(offset: int) -> str:
@@ -297,11 +333,13 @@ class TapoLoginWindow(Gtk.Window):
     """TP-Link ID・パスワード・プラグの IP を受け取る小さなログイン画面。
 
     パスワードは on_submit の引数として 1 回渡すだけで、ここには残さない（送った後に入力欄を空にする）。
-    メールアドレスと IP は次回の初期値として呼び出し側が保存する。パスワードは保存しない。
+    メールアドレスと IP は次回の初期値として呼び出し側が保存する。「保存する」のチェックは on_submit の
+    最後の引数で渡し、TPM への封印は呼び出し側が最初の実測が取れてから行う。
+    save_problem は、保存を使えない理由（None なら使える）。理由があるときはチェックを無効にして理由を出す。
     """
 
     def __init__(self, parent: Gtk.Window, host: str, username: str, message: str,
-                 on_submit, on_cancel, on_closed) -> None:
+                 on_submit, on_cancel, on_closed, save_problem: Optional[str] = None) -> None:
         super().__init__(title="Tapo にログイン", transient_for=parent, modal=True)
         self.set_resizable(False)
         self._on_submit = on_submit
@@ -316,8 +354,9 @@ class TapoLoginWindow(Gtk.Window):
 
         intro = Gtk.Label(
             label="PC 全体の電力を、Tapo プラグ（P110M）の実測で表示します。\n"
-                  "パスワードは保存しません（この画面を閉じた後はメモリにだけ置きます）。",
-            xalign=0,
+                  "パスワードは平文ではファイルに書きません。「保存する」を入れると、この PC の TPM で暗号化して"
+                  "保存し、次回からは自動でログインします。",
+            xalign=0, wrap=True, max_width_chars=48,
         )
         box.append(intro)
 
@@ -335,6 +374,16 @@ class TapoLoginWindow(Gtk.Window):
             grid.attach(entry, 1, row, 1, 1)
         for entry in (self.host_entry, self.username_entry, self.password_entry):
             entry.connect("activate", self._on_activate)
+
+        self.save_check = Gtk.CheckButton(label="この PC に保存する（再起動後も自動でログイン）")
+        self.save_check.set_active(save_problem is None)
+        self.save_check.set_sensitive(save_problem is None)
+        self.save_check.set_tooltip_text(
+            "パスワードをこの PC の TPM 2.0 で暗号化して state/tapo.cred に保存します（この PC でしか復号できません）。"
+            "外してログインすると、保存したものを消します。" if save_problem is None
+            else f"保存を使えません: {save_problem}"
+        )
+        box.append(self.save_check)
 
         self.message_label = Gtk.Label(label=message, xalign=0, wrap=True, max_width_chars=48)
         self.message_label.add_css_class("level-critical" if message else "level-plain")
@@ -378,7 +427,7 @@ class TapoLoginWindow(Gtk.Window):
         self._submitted = True
         self.password_entry.set_text("")
         self.close()
-        self._on_submit(host_or_problem, username, password)
+        self._on_submit(host_or_problem, username, password, self.save_check.get_active())
 
     def _on_close_request(self, _window: Gtk.Window) -> bool:
         self.password_entry.set_text("")
@@ -418,6 +467,8 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         # ファン補正スライダー。-F off（ファン行なし）のときは作らない。
         self._fan_offset = 0
         self._fan_offset_path = Path(args.fan_offset_file)
+        self._fan_preference_path = Path(args.fan_preference_file)
+        self._fan_preference_dirty = False  # スライダーが動いて、まだ保存していない
         self._fan_offset_published = False  # 0 以外の値をファイルに書いている間だけ True
         self.fan_offset_scale: Optional[Gtk.Scale] = None
         self.fan_offset_name: Optional[Gtk.Label] = None
@@ -427,12 +478,16 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         self._tapo_login_window: Optional[TapoLoginWindow] = None
         self._tapo_restart_source_id: Optional[int] = None
         self._tapo_note = ""  # 実測が出ていない理由。「PC 全体」のツールチップに添える
+        self._tapo_save_pending = False  # 「保存する」を選んだ。最初の実測が取れたら TPM へ封印して保存する
+        self._tapo_from_saved = False  # 今の資格情報は保存分を復号して取った（自動ログイン）
+        self._tapo_auto_failures = 0  # 自動ログインで最初の 1 回が読めなかった回数
 
         self._build_ui()
         self.connect("close-request", self._on_close_request)
 
         self._load_calibration_at_startup()
-        self._start_hang_watchdog()
+        self._hang_watchdog = hang_watchdog.HangWatchdog(HANG_LOG_FILE)
+        self._hang_watchdog.start()  # 使えなくても（ログを書けないなど）本体の動作には影響しない
         self._start_feeder()
         GLib.timeout_add_seconds(1, self._on_tick)
         if args.tapo == "auto":
@@ -494,7 +549,8 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         if self.args.tapo == "auto":
             self.tapo_button = Gtk.Button(label="Tapo")
             self.tapo_button.add_css_class("gpu-watch-calibrate")
-            self.tapo_button.set_tooltip_text("Tapo プラグにログインして、PC 全体を実測で表示する（パスワードは保存しない）")
+            self.tapo_button.set_tooltip_text(
+                "Tapo プラグにログインして、PC 全体を実測で表示する（「保存する」を選ぶと、次回から自動でログイン）")
             self.tapo_button.connect("clicked", lambda _button: self._open_tapo_login(""))
             bottom.append(self.tapo_button)
 
@@ -532,7 +588,11 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
             Gtk.Orientation.HORIZONTAL, -fan_offset.OFFSET_LIMIT, fan_offset.OFFSET_LIMIT, 1,
         )
         self.fan_offset_scale.set_digits(0)
-        self.fan_offset_scale.set_value(0)  # new_with_range の初期値は最小値（-50）。接続の前に 0 へ戻す
+        # new_with_range の初期値は最小値（-50）。シグナルをつなぐ前に、前回の値（無ければ 0）へ戻す。
+        # 補正ファイルへの書き出しは、最初の tick（1 秒後）に _publish_fan_offset が行う。
+        self._fan_offset = fan_offset.load_preference(self._fan_preference_path)
+        self.fan_offset_scale.set_value(self._fan_offset)
+        self.fan_offset_name.set_label(f"補正 {format_fan_offset(self._fan_offset)}")
         self.fan_offset_scale.set_draw_value(False)
         self.fan_offset_scale.set_hexpand(True)
         self.fan_offset_scale.set_size_request(FAN_OFFSET_SCALE_MIN_WIDTH, -1)
@@ -552,7 +612,17 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
     def _on_fan_offset_changed(self, scale: Gtk.Scale) -> None:
         self._fan_offset = fan_offset.clamp_offset(scale.get_value())
         self.fan_offset_name.set_label(f"補正 {format_fan_offset(self._fan_offset)}")
+        self._fan_preference_dirty = True  # 保存は tick でまとめる（ドラッグ中に何度も書かない）
         self._publish_fan_offset()
+
+    def _save_fan_preference(self) -> None:
+        if not self._fan_preference_dirty or self.fan_offset_scale is None:
+            return
+        self._fan_preference_dirty = False
+        try:
+            fan_offset.save_preference(self._fan_preference_path, self._fan_offset)
+        except OSError as error:
+            self._hold_message(f"ファン補正の保存値を書けません: {error}", FAILURE_DISPLAY_SEC)
 
     def _publish_fan_offset(self) -> None:
         """補正が 0 以外の間だけ、ファイルを書き直す（fan_host.py は約 10 秒古いと 0 に戻す）。
@@ -572,8 +642,10 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
             self._hold_message(f"ファン補正を書けません: {error}", FAILURE_DISPLAY_SEC)
 
     def _withdraw_fan_offset(self) -> None:
-        """窓を閉じる・終了要求を受けたとき、補正を取り下げて自動カーブに戻す。"""
+        """窓を閉じる・終了要求を受けたとき、補正を取り下げて自動カーブに戻す。
+        スライダーの値は保存したままにする（次の起動で戻る）。"""
         if self.fan_offset_scale is not None:
+            self._save_fan_preference()
             fan_offset.clear_offset(self._fan_offset_path)
             self._fan_offset_published = False
 
@@ -694,7 +766,7 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
 
     def _stop_feeder(self) -> None:
         self._shutting_down = True
-        self._stop_hang_watchdog()  # 終了処理の共通の入口なので、ここで外す
+        self._hang_watchdog.stop()  # 終了処理の共通の入口なので、ここで外す
         self._stop_tapo()
         if self._restart_source_id is not None:
             GLib.source_remove(self._restart_source_id)
@@ -711,53 +783,46 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         self._withdraw_fan_offset()
         return False  # 既定の「閉じる」処理を継続させる
 
-    # ---- ハングの診断（faulthandler）----------------------------------------
-
-    def _start_hang_watchdog(self) -> None:
-        """メインループが止まったときの診断を仕掛ける。使えなくても本体の動作には影響させない。
-
-        - 1 秒ごとの tick で見張りを掛け直す。tick が HANG_DUMP_SEC 秒途切れる（メインスレッドが固まる）と、
-          faulthandler の別スレッドが全スレッドのスタックを HANG_LOG_FILE に書く。
-        - SIGUSR1 でも同じ書き出しをする（固まった窓を終了させる前に `kill -USR1 <pid>` で取れる）。
-        """
-        self._hang_log = None
-        try:
-            STATE_DIR.mkdir(parents=True, exist_ok=True)
-            self._hang_log = open(HANG_LOG_FILE, "a", encoding="utf-8")
-            self._hang_log.write(f"---- 起動 {time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()}\n")
-            self._hang_log.flush()
-            faulthandler.register(signal.SIGUSR1, file=self._hang_log, all_threads=True)
-        except (OSError, ValueError, RuntimeError):
-            self._hang_log = None
-            return
-        self._arm_hang_watchdog()
-
-    def _arm_hang_watchdog(self) -> None:
-        if self._hang_log is not None:
-            faulthandler.dump_traceback_later(HANG_DUMP_SEC, repeat=False, file=self._hang_log)
-
-    def _stop_hang_watchdog(self) -> None:
-        if self._hang_log is None:
-            return
-        faulthandler.cancel_dump_traceback_later()
-        try:
-            faulthandler.unregister(signal.SIGUSR1)
-        except (ValueError, RuntimeError):
-            pass
-        self._hang_log.close()
-        self._hang_log = None
-
     # ---- Tapo（PC 全体の実測）。ログイン画面 → 読み取り役の子プロセス -------------
 
     def _startup_tapo_login(self) -> bool:
-        """起動の 1 秒後に、読み取り役が使える状態ならログイン画面を出す（使えなければ理由だけ残す）。"""
+        """起動の 1 秒後。読み取り役が使えて、前回の IP があり、封印した保存分があれば、復号して自動で
+        ログインする。無ければ（初回・保存しなかった・復号できない）ログイン画面を出す。
+        読み取り役が使えないときは理由だけ残す。"""
         available, reason = tapo_feed.reader_available(Path(self.args.tapo_python))
         if not available:
             self._tapo_note = reason
             return GLib.SOURCE_REMOVE
+        profile = tapo_feed.load_profile()
+        host_valid, host_or_problem = tapo_feed.validate_host(self.args.tapo_host or profile["host"])
+        if host_valid and tapo_vault.has_sealed():
+            vault_problem = tapo_vault.unavailable_reason()
+            if vault_problem is None:
+                self._tapo_note = "TPM に封印したログインを復号しています"
+                run_in_background(
+                    tapo_vault.unseal, lambda result, problem: self._on_vault_unsealed(host_or_problem, result, problem),
+                )
+                return GLib.SOURCE_REMOVE
+            self._tapo_note = f"保存したログインを復号できません: {vault_problem}"
+            self._open_tapo_login("")
+            return GLib.SOURCE_REMOVE
         self._tapo_note = "未ログイン（「Tapo」ボタンでログイン）"
         self._open_tapo_login("")
         return GLib.SOURCE_REMOVE
+
+    def _on_vault_unsealed(self, host: str, result: Optional[tuple], problem: Optional[str]) -> None:
+        if self._shutting_down or self._tapo_credentials is not None:
+            return  # 窓を閉じた、または復号している間に手でログインした
+        if result is not None:
+            username, password = result
+            self._tapo_from_saved = True
+            self._tapo_save_pending = False  # もう保存してある
+            self._tapo_credentials = (host, username, password)
+            self._start_tapo()
+            self._refresh_view()
+            return
+        self._tapo_note = f"保存したログインを復号できません: {problem}" if problem else "保存したログインがありません"
+        self._open_tapo_login("")
 
     def _open_tapo_login(self, message: str) -> None:
         if self._shutting_down:
@@ -775,6 +840,7 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         self._tapo_login_window = TapoLoginWindow(
             self, host, profile["username"], message,
             self._on_tapo_submitted, self._on_tapo_login_closed, self._on_tapo_login_window_closed,
+            save_problem=tapo_vault.unavailable_reason(),
         )
         self._tapo_login_window.present()
 
@@ -788,13 +854,39 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         if self._tapo_credentials is None:
             self._tapo_note = "未ログイン（「Tapo」ボタンでログイン）"
 
-    def _on_tapo_submitted(self, host: str, username: str, password: str) -> None:
+    def _on_tapo_submitted(self, host: str, username: str, password: str, save: bool) -> None:
         try:
-            tapo_feed.save_profile(host, username)  # 保存するのは IP とメールアドレスだけ
+            tapo_feed.save_profile(host, username)  # ファイルに保存するのは IP とメールアドレスだけ
         except OSError as error:
             self._hold_message(f"Tapo の設定を保存できません: {error}", FAILURE_DISPLAY_SEC)
+        self._tapo_from_saved = False
+        self._tapo_auto_failures = 0
+        # 保存は最初の実測が取れてから（打ち間違えたパスワードを残さない）。
+        # 「保存する」を外したときは、保存済みのものを消す。
+        self._tapo_save_pending = save and tapo_vault.unavailable_reason() is None
+        if not save:
+            try:
+                tapo_vault.clear()
+            except OSError as error:
+                self._hold_message(f"保存したログインを消せません: {error}", FAILURE_DISPLAY_SEC)
         self._tapo_credentials = (host, username, password)
         self._start_tapo()
+
+    def _store_tapo_login_if_pending(self) -> None:
+        """「保存する」を選んで、最初の実測が取れたとき 1 回だけ、TPM に封印して保存する。"""
+        if not self._tapo_save_pending or self._tapo_credentials is None:
+            return
+        self._tapo_save_pending = False
+        _host, username, password = self._tapo_credentials
+        run_in_background(lambda: tapo_vault.seal(username, password), self._on_tapo_login_stored)
+
+    def _on_tapo_login_stored(self, _result: None, problem: Optional[str]) -> None:
+        if self._shutting_down:
+            return
+        if problem:
+            self._hold_message(f"Tapo のログインを保存できません: {problem}", FAILURE_DISPLAY_SEC)
+        else:
+            self._hold_message("Tapo のログインを保存しました", CALIBRATE_DONE_DISPLAY_SEC)
 
     def _start_tapo(self) -> None:
         self._stop_tapo_feeder()
@@ -820,6 +912,8 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         self.model.feed_line(line)
         if self.model.measured_system_w() is not None:
             self._tapo_note = ""
+            self._tapo_auto_failures = 0
+            self._store_tapo_login_if_pending()
         self._refresh_view()
 
     def _on_tapo_exit(self, exit_code: int, last_stderr: str) -> None:
@@ -827,17 +921,33 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         if self._shutting_down:
             return
         if tapo_feed.classify_exit(exit_code) == "ask_again":
-            # 資格情報の不備、または最初の 1 回が読めなかった。誤ったパスワードで繰り返し試すと機器側に
-            # 制限されるおそれがあるので自動では再試行せず、パスワードをメモリから消してログイン画面を出し直す。
-            self._tapo_credentials = None
             reason = last_stderr or f"終了コード {exit_code}"
-            self._tapo_note = f"Tapo に接続できませんでした: {reason}"
-            self._open_tapo_login(f"接続できませんでした。IP・ID・パスワードを確認してください。\n（{reason}）")
+            retry_delay = None
+            if exit_code == tapo_feed.EXIT_FIRST_READ_FAILED and self._tapo_from_saved:
+                retry_delay = tapo_feed.auto_login_retry_delay(self._tapo_auto_failures)
+            if retry_delay is not None:
+                # 保存分を復号して取った資格情報での自動ログイン。起動直後でネットワークがまだ無いことがあるので、
+                # 間隔をあけて数回だけ試し直す（誤ったパスワードで試し続けないよう回数は絞る）。
+                self._tapo_auto_failures += 1
+                self._tapo_note = f"Tapo に接続できませんでした（{retry_delay} 秒後に自動で試し直す）: {reason}"
+                self._schedule_tapo_restart(retry_delay)
+            else:
+                # 資格情報の不備、または最初の 1 回が読めなかった。誤ったパスワードで繰り返し試すと機器側に
+                # 制限されるおそれがあるので自動では再試行せず、パスワードをメモリから消してログイン画面を出し直す。
+                # 保存分は消さない（一時的な停電や機器の不在で消さないため）。
+                self._tapo_credentials = None
+                self._tapo_save_pending = False
+                self._tapo_from_saved = False
+                self._tapo_note = f"Tapo に接続できませんでした: {reason}"
+                self._open_tapo_login(f"接続できませんでした。IP・ID・パスワードを確認してください。\n（{reason}）")
         else:
             self._tapo_note = f"Tapo の読み取りが止まりました（終了コード {exit_code}）。{RESTART_DELAY_SEC} 秒後に再開します"
-            if self._tapo_restart_source_id is None:
-                self._tapo_restart_source_id = GLib.timeout_add_seconds(RESTART_DELAY_SEC, self._on_tapo_restart_timeout)
+            self._schedule_tapo_restart(RESTART_DELAY_SEC)
         self._refresh_view()
+
+    def _schedule_tapo_restart(self, delay_sec: int) -> None:
+        if self._tapo_restart_source_id is None:
+            self._tapo_restart_source_id = GLib.timeout_add_seconds(delay_sec, self._on_tapo_restart_timeout)
 
     def _on_tapo_restart_timeout(self) -> bool:
         self._tapo_restart_source_id = None
@@ -857,11 +967,17 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
         """終了時。読み取りの子プロセスを止め、パスワードをメモリから消す。"""
         self._stop_tapo_feeder()
         self._tapo_credentials = None
+        self._tapo_save_pending = False
 
     # ---- 表示の更新 -----------------------------------------------------
 
     def _on_tick(self) -> bool:
-        self._arm_hang_watchdog()
+        if self._shutting_down:
+            # 窓を閉じた後も、アプリが終わるまでの間に tick が 1 回走ることがある。取り下げたファン補正を
+            # 書き直さない（古いファイルが残ると、fan_host.py が 10 秒間それを読む）。
+            return GLib.SOURCE_REMOVE
+        self._hang_watchdog.beat()
+        self._save_fan_preference()
         self._publish_fan_offset()
         self._refresh_status()
         return GLib.SOURCE_CONTINUE
@@ -1019,8 +1135,9 @@ class GpuWatchWindow(Gtk.ApplicationWindow):
             self.row_system_w.set_values(
                 format_scalar(measured, "W"), format_scalar(host.system_w.max(), "W"), plain_level(measured),
             )
-            # 毎秒変わる数値（推定との差など）は入れない。ツールチップの表示中に文が変わり続けると、
-            # 弾き出し窓（Wayland の popup）を作り直し続けることになり、ハングの疑いがあるため固定文にする。
+            # 毎秒変わる数値（推定との差など）は入れない固定文にする。2026-11-01 のハングで、ツールチップの
+            # 表示中に文が変わり続けて popup を作り直す不具合を疑って固定にした。2026-11-03 のハングの原因は
+            # 別（GL レンダラー。README「ハングの診断」）だったが、固定のままにしてある。
             self.row_system_w.set_tooltip("Tapo の実測（コンセント側の電力。電源ユニットの損失を含む）")
             return
         if status == "ok":
