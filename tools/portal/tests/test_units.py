@@ -21,6 +21,7 @@ import pytest
 PORTAL_DIR = Path(__file__).resolve().parent.parent
 PORTAL_PY = PORTAL_DIR / "portal.py"
 INDEX_HTML = PORTAL_DIR / "index.html"
+GUIDES_DIR = PORTAL_DIR / "guides"
 
 
 def _load_portal_module():
@@ -2864,3 +2865,98 @@ def test_post_other_gpu_service_start_stops_running_audiocraft(running_server, m
     assert events.index(["systemctl", "--user", "stop", "audiocraft"]) < events.index(
         ["systemctl", "--user", "start", "--no-block", "pixal3d"]
     )
+
+
+# ---------------------------------------------------------------------------
+# 使い方のページ（GET /guides/<名前>.html）
+# ---------------------------------------------------------------------------
+
+
+def _get(server, path: str) -> tuple[int, str, bytes]:
+    host, port = server.server_address
+    connection = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        return response.status, response.getheader("Content-Type", ""), response.read()
+    finally:
+        connection.close()
+
+
+def test_resolve_guide_path_accepts_only_plain_names_directly_under_guides(tmp_path):
+    guides = tmp_path / "guides"
+    guides.mkdir()
+    (guides / "ok-1.html").write_text("<html></html>", encoding="utf-8")
+    (guides / "sub").mkdir()
+    (guides / "sub" / "inner.html").write_text("<html></html>", encoding="utf-8")
+    (tmp_path / "secret.html").write_text("secret", encoding="utf-8")
+    (guides / "link.html").symlink_to(tmp_path / "secret.html")
+
+    assert portal.resolve_guide_path("/guides/ok-1.html", guides) == (guides / "ok-1.html").resolve()
+    assert portal.resolve_guide_path("/guides/ok-1.html?v=2", guides) == (guides / "ok-1.html").resolve()
+    for bad in (
+        "/guides/",
+        "/guides/missing.html",
+        "/guides/OK-1.html",
+        "/guides/ok-1.htm",
+        "/guides/../secret.html",
+        "/guides/%2e%2e/secret.html",
+        "/guides/..%2fsecret.html",
+        "/guides/sub/inner.html",
+        "/guides/link.html",  # シンボリックリンクで外を指すものは読まない
+        "/guidesok-1.html",
+        "/index.html",
+    ):
+        assert portal.resolve_guide_path(bad, guides) is None, bad
+
+
+def test_get_guide_returns_html(running_server):
+    status, content_type, body = _get(running_server, "/guides/pixelartistry.html")
+    assert status == 200
+    assert content_type.startswith("text/html")
+    assert b"<html" in body.lower()
+
+
+@pytest.mark.parametrize("path", ["/guides/../portal.py", "/guides/%2e%2e%2fportal.py", "/guides/missing.html", "/guides/"])
+def test_get_guide_rejects_other_paths(running_server, path):
+    status, _, body = _get(running_server, path)
+    assert status == 404
+    assert b"def " not in body  # portal.py の中身を返していない
+
+
+def test_guides_have_no_hardcoded_server_ip_and_no_external_resources():
+    pages = sorted(GUIDES_DIR.glob("*.html"))
+    assert pages, "guides/ に HTML が無い"
+    for page in pages:
+        html_text = page.read_text(encoding="utf-8")
+        assert "192.168." not in html_text, page.name
+        # 1 ファイルで完結させる（外部の CSS・JS・画像を読まない）
+        assert not re.search(r'<(script|link|img)[^>]+(src|href)="(https?:)?//', html_text), page.name
+
+
+def test_pixelartistry_guide_builds_comfyui_link_from_hostname():
+    html_text = (GUIDES_DIR / "pixelartistry.html").read_text(encoding="utf-8")
+    assert "location.hostname" in html_text
+    assert ":8188" in html_text
+
+
+def test_index_html_guide_links_point_to_existing_pages():
+    hrefs = re.findall(r'href:\s*"(/guides/[^"]+)"', _html_text())
+    assert hrefs, "index.html に使い方のページへのリンクが無い"
+    for href in hrefs:
+        assert portal.resolve_guide_path(href) is not None, href
+
+
+
+def test_video_guide_builds_comfyui_link_from_hostname():
+    html_text = (GUIDES_DIR / "video-generation.html").read_text(encoding="utf-8")
+    assert "location.hostname" in html_text
+    assert ":8188" in html_text
+
+
+def test_comfyui_card_links_both_guides():
+    html_text = _html_text()
+    comfyui_block = html_text[html_text.index('"comfyui": {'):html_text.index('"audiocraft": {', html_text.index('"comfyui": {'))]
+    hrefs = re.findall(r'href:\s*"(/guides/[^"]+)"', comfyui_block)
+    assert hrefs == ["/guides/pixelartistry.html", "/guides/video-generation.html"]
+    assert "meta.guides" in html_text

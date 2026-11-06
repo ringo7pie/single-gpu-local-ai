@@ -78,7 +78,7 @@ flowchart LR
 | `tools/pixal3d` | Multi-view images → 3D mesh (Pixal3D, port 7861) | yes |
 | `tools/audiocraft` | Text → music and sound effects (MusicGen Medium / AudioGen Medium via AudioCraft, port 7862). Weights are non-commercial (CC-BY-NC 4.0) | yes |
 | `tools/hunyuan3d` | Four images → 3D mesh (Hunyuan3D-2mv, port 7860). **Needs license acceptance**, see below | yes |
-| `tools/comfyui` | ComfyUI + watertight-mesh workflow (port 8188); native parts built from source | yes |
+| `tools/comfyui` | ComfyUI + watertight-mesh workflow (port 8188); native parts built from source. Also text/image-to-video workflows (HunyuanVideo 1.5, Kandinsky 6.0 Lite, LTX 2.5 Fast) | yes |
 | `tools/qwen-worker` | MCP server that lets Claude Code / Codex use a local Qwen for read-only research and sandboxed edits | no (calls Ollama) |
 | `tools/local-ai-bridge` | Heavier bridge: task ledger, git-worktree isolation, verification, budgets | no (calls Ollama) |
 | `tools/model-eval` | Evaluation harness, hidden-test grading, HTML report builders | no (calls servers) |
@@ -191,3 +191,4 @@ The code and documents in this repository are MIT-licensed ([LICENSE](LICENSE)).
 - **Pixal3D** output is treated as non-commercial (NVIDIA Source Code License components, Meta DINOv3).
 - **AudioCraft** code is MIT, but the MusicGen / AudioGen model weights are CC-BY-NC 4.0 (non-commercial only).
 - Product and company names belong to their owners; this project is not affiliated with or endorsed by them.
+chatgpt mcp のテストです。

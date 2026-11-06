@@ -297,6 +297,13 @@
     color: var(--accent);
   }
   .card-link.disabled.secondary { margin-top: 0; }
+  /* 使い方のページへのリンク（入口ページ自身が配るので、サービスが止まっていても出す）。 */
+  a.card-guide {
+    align-self: flex-start;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
   .card-link.disabled {
     background: transparent;
     border: 1px dashed var(--border);
@@ -436,7 +443,9 @@
       "ふだんのチャットは、下の Open WebUI から使うほうが履歴を残せます。",
     openChatLink:
       "Open WebUI を新しいタブで開きます。Strata のモデルは、開いた画面の上部のモデル一覧から選んで使います。" +
-      "Strata が停止しているとき、そのモデルは選べないか、エラーになります。"
+      "Strata が停止しているとき、そのモデルは選べないか、エラーになります。",
+    openGuideLink:
+      "使い方のページを新しいタブで開きます。このページ（入口ページ）が配るので、サービスが止まっていても読めます。"
   };
 
   // 専門用語クリックで開くダイアログの見出し・本文。キーは画面の data-term と一致させる。
@@ -519,7 +528,8 @@
     "ComfyUI":
       "ノードをつないだワークフローで生成を行う UI（ポート 8188）。ここでは PixelArtistry の" +
       "ワークフロー（Pixal3D / TRELLIS.2 + WTiVo + LODTailor）で、1 枚の画像から水密（watertight）" +
-      "メッシュや低ポリのゲーム用アセットを作ります。3D 生成で GPU を大きく使うため、Hunyuan3D・" +
+      "メッシュや低ポリのゲーム用アセットを作ります。文章・画像から動画を作るワークフロー（HunyuanVideo 1.5・" +
+      "Kandinsky 6.0 Lite・LTX 2.5 Fast。Kandinsky と LTX は音声付き）も入っています。GPU を大きく使うため、Hunyuan3D・" +
       "Pixal3D・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えず、どれかの起動時に動いている他のサービスは自動で" +
       "停止します。起動・停止・メモリ上限の変更はこの画面から行えます。",
     "音楽・効果音生成":
@@ -729,11 +739,24 @@
     },
     "comfyui": {
       description: "1 枚の画像から水密（watertight）メッシュや低ポリのゲーム用アセットを作る、" +
-        "PixelArtistry のワークフロー（ノードをつないで生成する UI）",
+        "PixelArtistry のワークフロー（ノードをつないで生成する UI）。" +
+        "文章・画像から動画を作る HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast のワークフローも入っている（左の Workflows → Video）",
       stoppedReason: "起動していません。下のボタンから起動できます。",
       startingReason: "起動処理中です。まもなく利用できるようになります。",
       note: "GPU の排他: Hunyuan3D・Pixal3D・音楽・効果音生成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
-        + " 3D 生成で GPU を大きく使います。"
+        + " 3D 生成・動画生成で GPU を大きく使います。",
+      guides: [
+        {
+          href: "/guides/pixelartistry.html",
+          label: "使い方（Pixal3D / TRELLIS.2 の切り替え・各ワークフロー）→",
+          tooltip: TOOLTIPS.openGuideLink
+        },
+        {
+          href: "/guides/video-generation.html",
+          label: "使い方（動画生成: HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）→",
+          tooltip: TOOLTIPS.openGuideLink
+        }
+      ]
     },
     "audiocraft": {
       description: "文章（説明文）から作曲（MusicGen Medium）と効果音（AudioGen Medium）を作る。説明文は英語で書く",
@@ -1318,6 +1341,18 @@
   }
 
   // 稼働中のサービスを新しいタブで開くリンク。isSecondary は 1 つ目のリンクの下に並べる 2 つ目のとき。
+  // 入口ページ自身が配る使い方のページへのリンク（相対パスなので、開いたホスト名のまま）。
+  function buildGuideLink(guide) {
+    const link = document.createElement("a");
+    link.className = "card-guide";
+    link.href = guide.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = guide.tooltip;
+    link.textContent = guide.label;
+    return link;
+  }
+
   function buildOpenLink(port, label, tooltip, isSecondary) {
     const link = document.createElement("a");
     link.className = "card-link" + (isSecondary ? " secondary" : "");
@@ -1377,6 +1412,10 @@
         note.className = "card-note";
         setTextWithGlossaryTerms(note, meta.note);
         card.appendChild(note);
+      }
+
+      for (const guide of meta.guides || []) {
+        card.appendChild(buildGuideLink(guide));
       }
 
       renderLowVramSwitch(card, service);

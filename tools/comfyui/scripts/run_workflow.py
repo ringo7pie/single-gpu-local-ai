@@ -21,7 +21,9 @@ comfyui_frontend_package 1.53.6 の settingStore-*.js を読んで合わせた�
 - mode=4（bypass）のノードは出さず、出力を「同じ型の入力」の元へ付け替える（_getBypassSlotIndex と同じ順:
   受け手の型が * なら同じ番号の入力、次に同じ番号で型が合う入力、次に型が完全に一致する最初の入力、
   最後に型が両立する最初の入力）。
-- subgraph（definitions.subgraphs）を使うノードがあれば、未対応として止める。
+- subgraph（definitions.subgraphs）を使うノードは、中身のノードに展開する（id は画面と同じ「外の id:中の id」）。
+  subgraph の入力は、外のノードの同じ名前の入力にリンクがあればその元へ、無ければ外のノードの widgets_values
+  （widget につながる subgraph の入力の順に並ぶ）の値を中のノードへ渡す。入れ子の subgraph は未対応として止める。
 
 使い方:
   run_workflow.py convert WORKFLOW.json [-o api.json] [上書きの引数]
@@ -38,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import os
 import re
@@ -360,6 +363,125 @@ def find_subgraph_nodes(workflow: dict[str, Any]) -> list[str]:
     return [str(node["id"]) for node in workflow.get("nodes") or [] if str(node.get("type")) in subgraph_ids]
 
 
+SUBGRAPH_INPUT_NODE_ID = -10
+SUBGRAPH_OUTPUT_NODE_ID = -20
+
+
+def _link_fields(raw: Any) -> tuple[int, Any, int, Any, int, Any]:
+    if isinstance(raw, dict):
+        return (int(raw["id"]), raw["origin_id"], int(raw["origin_slot"]), raw["target_id"], int(raw["target_slot"]), raw.get("type"))
+    return (int(raw[0]), raw[1], int(raw[2]), raw[3], int(raw[4]), raw[5] if len(raw) > 5 else None)
+
+
+def expand_subgraphs(workflow: dict[str, Any]) -> tuple[dict[str, Any], dict[tuple[str, str], Any], list[str]]:
+    """subgraph を使うノードを中身のノードへ展開した写しを返す（元は変えない）。
+
+    返り値は (展開した UI 形式, 上書き {(中のノードの新しい id, 入力名): 値}, 展開した外のノードの id)。
+    外のノードの widgets_values は、widget につながる subgraph の入力の順に並ぶ（2026-11 のテンプレートで確認。
+    外のノードの inputs に無い subgraph の入力も widgets_values には値がある）。外のノードの mode が 0 以外なら止める。
+    """
+    definitions = {str(item.get("id")): item for item in (workflow.get("definitions") or {}).get("subgraphs") or []}
+    instances = [node for node in workflow.get("nodes") or [] if str(node.get("type")) in definitions]
+    if not instances:
+        return workflow, {}, []
+    for definition in definitions.values():
+        if any(str(inner.get("type")) in definitions for inner in definition.get("nodes") or []):
+            raise WorkflowConversionError(f"入れ子の subgraph は未対応: {definition.get('name') or definition.get('id')}")
+
+    link_ids = [_link_fields(raw)[0] for raw in workflow.get("links") or []]
+    for definition in definitions.values():
+        link_ids.extend(_link_fields(raw)[0] for raw in definition.get("links") or [])
+    next_link_id = max(link_ids, default=0) + 1
+
+    top_links = {fields[0]: fields for fields in (_link_fields(raw) for raw in workflow.get("links") or [])}
+    instance_ids = {str(node["id"]) for node in instances}
+    # (外のノードの id, 出力の番号) → (中のノードの新しい id, 出力の番号)
+    output_map: dict[tuple[str, int], tuple[str, int]] = {}
+    new_nodes: list[dict[str, Any]] = []
+    new_links: list[list[Any]] = []
+    overrides: dict[tuple[str, str], Any] = {}
+
+    for instance in instances:
+        instance_id = str(instance["id"])
+        if instance.get("mode", 0) != 0:
+            raise WorkflowConversionError(f"#{instance_id}: mode {instance.get('mode')} の subgraph は未対応")
+        definition = definitions[str(instance["type"])]
+        inner_nodes = {str(inner["id"]): copy.deepcopy(inner) for inner in definition.get("nodes") or []}
+        prefix = f"{instance_id}:"
+        sg_inputs = definition.get("inputs") or []
+        inner_links = [_link_fields(raw) for raw in definition.get("links") or []]
+
+        # subgraph の入力 → 中の受け手（最初の 1 つ）。widget につながる入力だけが外の widgets_values に並ぶ。
+        first_target: dict[int, tuple[str, int]] = {}
+        for link_id, origin_id, origin_slot, target_id, target_slot, _type in inner_links:
+            if int(origin_id) == SUBGRAPH_INPUT_NODE_ID and origin_slot not in first_target:
+                first_target[origin_slot] = (str(target_id), target_slot)
+        widget_inputs = []
+        for index in range(len(sg_inputs)):
+            target = first_target.get(index)
+            if target is None or target[0] not in inner_nodes:
+                continue
+            target_inputs = inner_nodes[target[0]].get("inputs") or []
+            if target[1] < len(target_inputs) and target_inputs[target[1]].get("widget"):
+                widget_inputs.append(index)
+        instance_values = instance.get("widgets_values") or []
+        promoted = {index: instance_values[position] for position, index in enumerate(widget_inputs) if position < len(instance_values)}
+        instance_inputs = {item.get("name"): item for item in instance.get("inputs") or []}
+
+        link_remap: dict[int, int | None] = {}
+        for link_id, origin_id, origin_slot, target_id, target_slot, link_type in inner_links:
+            origin_int = int(origin_id)
+            target_int = int(target_id)
+            if origin_int == SUBGRAPH_INPUT_NODE_ID and target_int == SUBGRAPH_OUTPUT_NODE_ID:
+                raise WorkflowConversionError(f"#{instance_id}: 入力から出力へ素通しする subgraph は未対応")
+            if target_int == SUBGRAPH_OUTPUT_NODE_ID:
+                output_map[(instance_id, target_slot)] = (prefix + str(origin_id), origin_slot)
+                continue
+            new_target = prefix + str(target_id)
+            if origin_int == SUBGRAPH_INPUT_NODE_ID:
+                name = sg_inputs[origin_slot].get("name") if origin_slot < len(sg_inputs) else None
+                outer = instance_inputs.get(name)
+                outer_link = outer.get("link") if outer else None
+                if outer_link is not None and int(outer_link) in top_links:
+                    _id, up_origin, up_slot, _t, _ts, _ty = top_links[int(outer_link)]
+                    link_remap[link_id] = next_link_id
+                    new_links.append([next_link_id, str(up_origin), up_slot, new_target, target_slot, link_type])
+                    next_link_id += 1
+                else:
+                    link_remap[link_id] = None
+                    if origin_slot in promoted and str(target_id) in inner_nodes:
+                        target_inputs = inner_nodes[str(target_id)].get("inputs") or []
+                        if target_slot < len(target_inputs):
+                            overrides[(new_target, target_inputs[target_slot].get("name"))] = promoted[origin_slot]
+                continue
+            link_remap[link_id] = next_link_id
+            new_links.append([next_link_id, prefix + str(origin_id), origin_slot, new_target, target_slot, link_type])
+            next_link_id += 1
+
+        for inner_id, inner in inner_nodes.items():
+            inner["id"] = prefix + inner_id
+            for item in inner.get("inputs") or []:
+                if item.get("link") is not None:
+                    item["link"] = link_remap.get(int(item["link"]))
+            new_nodes.append(inner)
+
+    # 外のグラフ: subgraph のノードを除き、その出力を受けていたリンクの元を中のノードへ付け替える。
+    expanded_nodes = [node for node in workflow.get("nodes") or [] if str(node["id"]) not in instance_ids] + new_nodes
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in top_links.values():
+        if str(target_id) in instance_ids:
+            continue
+        origin = (str(origin_id), origin_slot)
+        if origin[0] in instance_ids:
+            if origin not in output_map:
+                raise WorkflowConversionError(f"#{origin[0]} の出力 {origin_slot} が subgraph の中で使われていない")
+            origin = output_map[origin]
+        new_links.append([link_id, origin[0], origin[1], str(target_id), target_slot, link_type])
+    expanded = {key: value for key, value in workflow.items() if key not in ("nodes", "links", "definitions")}
+    expanded["nodes"] = expanded_nodes
+    expanded["links"] = new_links
+    return expanded, overrides, sorted(instance_ids)
+
+
 class UiGraph:
     """UI 形式のグラフ。入力から「実際に値を出すノードの出力」をたどる。"""
 
@@ -451,13 +573,11 @@ def convert_workflow(workflow: dict[str, Any], object_info: dict[str, Any]) -> t
         if all(isinstance(value, dict) and "class_type" in value for value in workflow.values()):
             raise WorkflowConversionError("すでに API 形式（class_type を持つ辞書）になっている")
         raise WorkflowConversionError("UI 形式のワークフローではない（nodes が無い）")
-    subgraph_nodes = find_subgraph_nodes(workflow)
-    if subgraph_nodes:
-        raise WorkflowConversionError(f"subgraph を使うノードがある（未対応）: {', '.join(subgraph_nodes)}")
+    workflow, overrides, expanded_ids = expand_subgraphs(workflow)
 
     graph = UiGraph(workflow)
     report: dict[str, Any] = {
-        "subgraphs": [], "notes": [], "frontend_only": [], "muted": [], "bypassed": [],
+        "subgraphs": expanded_ids, "notes": [], "frontend_only": [], "muted": [], "bypassed": [],
         "warnings": [], "controls": {}, "seed_inputs": [], "titles": {},
     }
     prompt: dict[str, Any] = {}
@@ -487,6 +607,10 @@ def convert_workflow(workflow: dict[str, Any], object_info: dict[str, Any]) -> t
             report["controls"][node_id] = controls
             report["seed_inputs"].extend([node_id, name] for name in controls)
         inputs: dict[str, Any] = {name: wrap_literal(value) for name, value in values.items()}
+
+        for (override_id, override_name), override_value in overrides.items():
+            if override_id == node_id:
+                inputs[override_name] = wrap_literal(override_value)
 
         for slot, ui_input in enumerate(node.get("inputs") or []):
             resolved = graph.resolve_input(node_id, slot, set())
@@ -540,9 +664,14 @@ def override_image(prompt: dict[str, Any], image_name: str) -> list[str]:
 
 
 def override_seed(prompt: dict[str, Any], report: dict[str, Any], seed: int) -> list[str]:
-    """control_after_generate を持つ入力（seed）を、すべて同じ値に固定する。"""
+    """control_after_generate を持つ入力のうち、名前が seed の入力（seed・noise_seed・sampling_mode.seed など）を同じ値に固定する。
+
+    PrimitiveInt の value も control_after_generate（fixed）を持つが、LTX 2.5 のテンプレートでは秒数や fps なので変えない。
+    """
     changed = []
     for node_id, name in report.get("seed_inputs", []):
+        if "seed" not in name.rsplit(".", 1)[-1].lower():
+            continue
         if node_id in prompt and not isinstance(prompt[node_id]["inputs"].get(name), list):
             prompt[node_id]["inputs"][name] = int(seed)
             changed.append(f"{node_id}.{name}")

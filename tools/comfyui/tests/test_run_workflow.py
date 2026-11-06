@@ -419,13 +419,88 @@ def test_widget_values_assigned_in_converted_nodes() -> None:
     assert any("refine_steps" in warning for warning in report["warnings"])
 
 
-def test_subgraph_is_rejected() -> None:
-    workflow = make_graph()
-    workflow["definitions"] = {"subgraphs": [{"id": "0a1b-sub", "name": "inner"}]}
-    workflow["nodes"].append(node(40, "0a1b-sub", []))
+def make_subgraph_workflow() -> dict:
+    """LTX 2.5 のテンプレートと同じ形を小さく作る。
+
+    外: PrimitiveString(1) → [subgraph 40].text ; [subgraph 40].IMAGE → Save3DAdvanced(2)
+    中: PrimitiveString(5)「Prompt」←(入力 0 text) ; KSampler(6) の seed ←(入力 1 noise_seed、外の widgets_values)
+        LoadImage(7) の image ←(入力 2 image_name、外の inputs に無いが widgets_values にはある)
+        KSampler(6).latent_image ← Upsample(8) ; LoadImage(7).IMAGE →(出力 0)
+    """
+    inner_nodes = [
+        node(5, "PrimitiveString", ["inner prompt"], inputs=[socket("value", "STRING", link=101, widget=True)],
+             outputs=[{"name": "STRING", "type": "STRING", "links": []}], title="Prompt"),
+        node(6, "KSampler", [7, "randomize", 20, "euler", 1.0],
+             inputs=[socket("model", "MODEL"), socket("latent_image", "LATENT", link=103),
+                     socket("seed", "INT", link=102, widget=True)]),
+        node(7, "LoadImage", ["a.png", "image"], inputs=[socket("image", "COMBO", link=104, widget=True)],
+             outputs=[{"name": "IMAGE", "type": "IMAGE", "links": [105]}]),
+        node(8, "Upsample", [512], inputs=[socket("latent", "LATENT")],
+             outputs=[{"name": "LATENT", "type": "LATENT", "links": [103]}]),
+    ]
+    inner_links = [
+        {"id": 101, "origin_id": -10, "origin_slot": 0, "target_id": 5, "target_slot": 0, "type": "STRING"},
+        {"id": 102, "origin_id": -10, "origin_slot": 1, "target_id": 6, "target_slot": 2, "type": "INT"},
+        {"id": 103, "origin_id": 8, "origin_slot": 0, "target_id": 6, "target_slot": 1, "type": "LATENT"},
+        {"id": 104, "origin_id": -10, "origin_slot": 2, "target_id": 7, "target_slot": 0, "type": "COMBO"},
+        {"id": 105, "origin_id": 7, "origin_slot": 0, "target_id": -20, "target_slot": 0, "type": "IMAGE"},
+    ]
+    definition = {
+        "id": "0a1b-sub", "name": "inner", "nodes": inner_nodes, "links": inner_links,
+        "inputs": [{"name": "text", "type": "STRING", "linkIds": [101]},
+                   {"name": "noise_seed", "type": "INT", "linkIds": [102]},
+                   {"name": "image_name", "type": "COMBO", "linkIds": [104]}],
+        "outputs": [{"name": "IMAGE", "type": "IMAGE", "linkIds": [105]}],
+    }
+    instance = node(40, "0a1b-sub", ["outer prompt", 42, "viking.png"],
+                    inputs=[socket("text", "STRING", link=1, widget=True), socket("noise_seed", "INT", widget=True)],
+                    outputs=[{"name": "IMAGE", "type": "IMAGE", "links": [2]}])
+    return {
+        "nodes": [
+            node(1, "PrimitiveString", ["from outside"], outputs=[{"name": "STRING", "type": "STRING", "links": [1]}]),
+            instance,
+            node(2, "Save3DAdvanced", ["3d/out", "", 1024], inputs=[socket("model_3d", "FILE_3D", link=2)]),
+        ],
+        "links": [[1, 1, 0, 40, 0, "STRING"], [2, 40, 0, 2, 0, "IMAGE"]],
+        "definitions": {"subgraphs": [definition]},
+    }
+
+
+def test_subgraph_is_expanded_with_outer_links_and_promoted_values() -> None:
+    workflow = make_subgraph_workflow()
     assert rw.find_subgraph_nodes(workflow) == ["40"]
-    with pytest.raises(rw.WorkflowConversionError, match="subgraph"):
-        rw.convert_workflow(workflow, OBJECT_INFO)
+    original = json.dumps(workflow, sort_keys=True)
+    prompt, report = rw.convert_workflow(workflow, OBJECT_INFO)
+    assert json.dumps(workflow, sort_keys=True) == original  # 元は変えない
+    assert report["subgraphs"] == ["40"]
+    assert set(prompt) == {"1", "2", "40:5", "40:6", "40:7", "40:8"}
+    # 外のリンクがある subgraph の入力は、その元につながる
+    assert prompt["40:5"]["inputs"]["value"] == ["1", 0]
+    # 外にリンクが無い入力は、外の widgets_values（widget の入力の順）の値になる
+    assert prompt["40:6"]["inputs"]["seed"] == 42
+    # 外の inputs に無い subgraph の入力も、外の widgets_values の値が勝つ
+    assert prompt["40:7"]["inputs"]["image"] == "viking.png"
+    # 中どうしのリンクと、subgraph の出力から外の受け手へのリンク
+    assert prompt["40:6"]["inputs"]["latent_image"] == ["40:8", 0]
+    assert prompt["2"]["inputs"]["model_3d"] == ["40:7", 0]
+    assert ["40:6", "seed"] in report["seed_inputs"]
+
+
+def test_subgraph_seed_override_reaches_inner_node() -> None:
+    prompt, report = rw.convert_workflow(make_subgraph_workflow(), OBJECT_INFO)
+    assert rw.override_seed(prompt, report, 7) == ["40:6.seed"]
+    assert prompt["40:6"]["inputs"]["seed"] == 7
+
+
+def test_nested_or_bypassed_subgraph_is_rejected() -> None:
+    nested = make_subgraph_workflow()
+    nested["definitions"]["subgraphs"][0]["nodes"].append(node(9, "0a1b-sub", []))
+    with pytest.raises(rw.WorkflowConversionError, match="入れ子"):
+        rw.convert_workflow(nested, OBJECT_INFO)
+    bypassed = make_subgraph_workflow()
+    bypassed["nodes"][1]["mode"] = 4
+    with pytest.raises(rw.WorkflowConversionError, match="mode 4"):
+        rw.convert_workflow(bypassed, OBJECT_INFO)
 
 
 def test_unknown_node_type_and_api_format_are_rejected() -> None:
@@ -583,3 +658,17 @@ def test_monitor_parsers() -> None:
     assert resource_monitor.parse_gpu_query("965, 37\n") == (965, 37)
     assert resource_monitor.parse_gpu_query("[N/A], [N/A]\n") == (None, None)
     assert resource_monitor.parse_compute_apps("490455, 938\n123, 10\n") == {490455: 938, 123: 10}
+
+
+def test_seed_override_leaves_primitive_int_values_alone() -> None:
+    """PrimitiveInt の value も control を持つが、LTX 2.5 では秒数・fps なので --seed で変えない。"""
+    info = dict(OBJECT_INFO)
+    info["PrimitiveInt"] = {"input": {"required": {"value": ["INT", {"control_after_generate": True}]}}, "input_order": {"required": ["value"]}}
+    workflow = {
+        "nodes": [node(1, "PrimitiveInt", [24, "fixed"]), node(2, "KSampler", [7, "randomize", 20, "euler", 1.0])],
+        "links": [],
+    }
+    prompt, report = rw.convert_workflow(workflow, info)
+    assert ["1", "value"] in report["seed_inputs"]
+    assert rw.override_seed(prompt, report, 42) == ["2.seed"]
+    assert prompt["1"]["inputs"]["value"] == 24

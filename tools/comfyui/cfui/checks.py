@@ -149,6 +149,54 @@ def classify_model_file(actual_size: int | None, expected_size: int) -> tuple[bo
     return True, f"{actual_size} バイト"
 
 
+def video_model_rows(
+    entries: Sequence[tuple[str, str, str, str, str, int, str]],
+    actual_sizes: Mapping[str, int | None],
+    group_labels: Mapping[str, str],
+) -> list[Row]:
+    """動画の重みの行を作る。actual_sizes は「置き先/ファイル名」→ 実際のバイト数（無ければ None）。
+
+    1 つも無いときは「未取得」の 1 行だけを OK で返す（動画生成を使わない導入でも doctor を NG にしない）。
+    1 つでもあれば、取りかけで欠けたものが分かるように、全部を classify_model_file で判定する。
+    """
+
+    keys = [f"{subdir}/{file_name}" for _group, subdir, file_name, *_rest in entries]
+    if all(actual_sizes.get(key) is None for key in keys):
+        return [
+            (
+                "動画の重み（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite）",
+                True,
+                "未取得（使うときは run-comfyui fetch-models --video。動画生成を使わないなら不要）",
+            )
+        ]
+    rows: list[Row] = []
+    for (group, _subdir, _file_name, _repo, _path, size, _sha), key in zip(entries, keys):
+        ok, detail = classify_model_file(actual_sizes.get(key), size)
+        if not ok and actual_sizes.get(key) is None:
+            detail = "ありません（run-comfyui fetch-models --video --group " + group + "）"
+        rows.append((f"動画の重み（{group_labels.get(group, group)}） {key}", ok, detail))
+    return rows
+
+
+def classify_node_link(resolved: str | None, expected: str) -> tuple[bool, str]:
+    """custom_nodes のシンボリックリンクが、期待した場所（resolve() 後の絶対パス）を指しているか。"""
+
+    if resolved is None:
+        return False, "ありません（setup-server.sh を実行してください）"
+    if resolved != expected:
+        return False, f"別の場所を指しています: {resolved}（期待値 {expected}）"
+    return True, f"{expected} を指しています"
+
+
+def classify_video_workflows(existing: Sequence[str], expected: Sequence[str]) -> tuple[bool, str]:
+    """動画のワークフローの写しが揃っているか（ファイル名の一覧で判定する）。"""
+
+    missing = [name for name in expected if name not in existing]
+    if missing:
+        return False, "足りません: " + "、".join(missing) + "（scripts/adapt_video_workflows.py）"
+    return True, f"{len(expected)} 本あります"
+
+
 def model_url(base_url: str, repo: str, path_in_repo: str) -> str:
     """HF の resolve/main の URL を組み立てる。"""
 

@@ -2,6 +2,7 @@
 
 ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しない）。導入・点検・ワークフローの写し方は
 `tools/comfyui/README.md` を Read する。
+この機体での実測（時間・memory.peak・VRAM・面数・閉じているか）は `knowledge/10-silver/resources/comfyui-measurements.md` を Read する。
 
 ## 画像 1 枚から 3D の入口（2026-10-25）
 
@@ -19,13 +20,7 @@ ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しな�
 - 画面で保存し直したファイルに今の版の変更だけを当てるときは `adapt_workflows.py --upgrade-easy`（入力画像などの手直しは残す。何度流しても同じ）。
   画面の `linearData` は旧書式 `[ノード id, widget 名]` を、読み込み時に `"<workflow id>:<ノード id>:<widget 名>"` へ変換する（frontend 1.55.17）。
 - 必要な重みは導入済みの 9 点に含まれる。追加のダウンロードは要らない。
-- 実機（A30、`--free-before`、`run_workflow.py run`）の結果。GLB は Blender 5.2.2（CPU）で描画して形を確かめた:
-  - `viking_wolf_rune_axe.png` の既定は 167〜173 秒、memory.peak 17.5 GiB、VRAM ピーク 12,598 MiB、698,096〜698,185 面・PBR 4096px
-    （同じ seed でも 89 面違う）。`D_superhero_female.png` は 111.9 秒、memory.peak 18.0 GiB、VRAM ピーク 10,426 MiB。
-  - `E_copper_coin.png` の 30,000 面・2048px は 370.8 秒（memory.peak 20.4 GiB、VRAM 16,412 MiB）。29,796 面、全テクスチャ 2048px。
-  - 斧の 50,000,000（間引かない）・8192px は 235.9 秒（memory.peak 22.8 GiB、VRAM 12,572 MiB）。3,353,172 面、
-    ベースカラー・金属粗さ・AO 8192px、法線 2048px、GLB 239.7 MB。
-  - 時間の大半は入力画像に依存する前段の KSampler で、ポリゴン数・テクスチャサイズの設定には依らない。
+- 時間の大半は入力画像に依存する前段の KSampler で、ポリゴン数・テクスチャサイズの設定には依らない。
 - 確かめていないこと: アプリモードの表示（入力欄の名前・結果の 3D）。利用者が画面で実行した記録はあるが、表示自体は見ていない。
   コードでは 3D 出力の分岐（`Preview3d`）があり、Save 3D の出力の種類（`3d`）と合う。表示がおかしければグラフ表示に切り替えて使う。
 
@@ -34,11 +29,11 @@ ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しな�
 - 写し（`workflows/PixelArtistry/` の 4 本）は、Load Image の真上（`pos=(-5090,-240)`）に緑の日本語ノート「使い方（日本語・この機体）」を持ち、
   開いたときの初期表示（`extra.ds`）は縮尺 0.5・`offset=(5250,300)`。本文は `cfui/notes_ja.py`、足すのは `adapt_workflows.py`。表示は目で確かめていない。
 - 01b（2K）の WTiVo `proxy_points` は配布元の 25M を **20M** に下げて写す（`cfui/config.py` の `WTIVO_2K_PROXY_POINTS`、`--proxy-points-2k`）。
-  斧のサンプルでは 12M・16M・20M が成功（約 6 分、WTiVo の出力 約 39.6M 面、memory.peak 31〜35 GiB、VRAM 約 13.2 GiB）。25M は出力が 82.55M 面に跳び、
-  LODTailor の Blender が RSS 32.3 GiB を使って RAM の歯止め（anon+swap 43 GiB）に当たる。跳ぶ値が画像で変わるかは確かめていない。
-- doctor（自己試験込み）は全項目 OK。01 は 240 秒・memory.peak 23.2 GiB、02 は 374 秒・26.9 GiB、03 は 174 秒・23.0 GiB、VRAM は 7.6〜10.9 GiB。
-  最終 GLB はどれも境界辺 0・非多様体辺 0。memory.peak は cgroup の中の Blender とファイルのキャッシュを含む。表と根拠は `tools/comfyui/README.md` の
-  「2K（01b）をこの機体で通す設定」と「実機試験の結果（2026-11-03、再確認）」を Read する。
+  斧のサンプルでは 12M・16M・20M が成功し、25M は LODTailor の Blender が RAM の歯止めに当たる。跳ぶ値が画像で変わるかは確かめていない。
+- doctor（自己試験込み）は全項目 OK で、01・02・03 の最終 GLB はどれも境界辺 0・非多様体辺 0。
+- 形を作るモデルはグループ「Switch Model Here」のノード「Boolean (Switch to Trellis2)」（id 316）で選ぶ（false = Pixal3D、true = TRELLIS.2）。既定は 03 だけ TRELLIS.2。
+  Image_to_3D のアプリモードの入力にスイッチは無い。利用者向けの説明は `tools/portal/guides/pixelartistry.html`（入口ページの ComfyUI のカードからリンク）。
+- 形を TRELLIS.2 で作ると、斧のサンプルでは **02 の最終 GLB が閉じない**（2026-11-03）。01・01b は閉じる。閉じた低ポリが要るときは Pixal3D を使う。
 
 ## エラーの読み方
 
@@ -49,6 +44,14 @@ ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しな�
 ## 画面を使わずに通す
 
 - `tools/comfyui/scripts/run_workflow.py` は DynamicCombo（型 `COMFY_DYNAMICCOMBO_V3`。RemeshMesh の `sign_mode` など）に対応している。
-  API の入力名は「親.子」（`sign_mode` と `sign_mode.qef`）。Autogrow など他の動的な入力は未対応。
+  API の入力名は「親.子」（`sign_mode` と `sign_mode.qef`）。Autogrow はリンクだけの入力（`ComfyMathExpression` の `values.a`）なら通る。
+- subgraph は中のノードへ展開する（id は `外:中`）。`--seed` は名前が seed の入力だけを変える（2026-11-05 までは PrimitiveInt も変えていた）。
 - 変換には生きたサーバーの `/object_info` が要る。`tools/comfyui/logs/object_info.json`（2026-10-03 の保存）はテンプレートより古い。
   GPU を使わずに取るなら、`main.py --cpu --listen 127.0.0.1 --port 8189` の確認用サーバーを使う。
+
+## 動画生成（2026-11-05）
+
+- 画面の Workflows → Video に 8 本（HunyuanVideo 1.5 / Kandinsky 6.0 Lite・Lite distill / LTX 2.5 Fast の T2V・I2V）。
+  重みは `run-comfyui fetch-models --video`（約 111 GiB）。上流の事情と選んだ重みは `knowledge/10-silver/resources/comfyui-video.md` を Read する。
+- 所要時間は LTX・Kandinsky distill が 1.5〜2.5 分、Kandinsky Lite が約 19 分、HunyuanVideo が約 50 分（5 秒の動画、2026-11-06）。
+  実測と RAM の振る舞いは `knowledge/10-silver/resources/comfyui-measurements.md` と `resources/comfyui-video.md` を Read する。

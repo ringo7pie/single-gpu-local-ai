@@ -25,9 +25,16 @@
   （2026-10-16 に実測: VRAM 5.6 GiB・RSS 8.4 GiB・CPU 約 1.3 コアを数十分以上）。`vram-policy.sh status` は空き VRAM と Ollama しか見ないので、
   Strata・3D 生成・計測の前に `nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv` で他のプロセスを確かめ、
   動いていれば起動も計測もしない（相手の学習を落とすおそれがあり、キャッシュも小さくなって比較にならない）。
+- ai-finance の常駐スケジューラ（`python -m ai_finance.smart_scheduler`）は GPU に 452 MiB の計算プロセスとして常駐し、nvidia-smi の
+  process_name は `python` としか出ない。`tools/comfyui/scripts/wait-gpu-idle.sh --allow ai_finance` はコマンドラインでも照合して除く（2026-11-06 から）。
 - オンライン。モデルのダウンロードは可能。
-- ブラウザは無い（`/usr/bin/firefox` は snap の導入を促すだけで動かない）。HTML の図を目で確かめるときは、SVG を
-  `uvx --with cairosvg python` で PNG にして見る。
+- ブラウザは Brave 156.1（`/opt/brave.com/brave/brave`、2026-11-03 に確認）。`/usr/bin/firefox` は snap の導入を促すだけで動かない。
+  HTML を目で確かめるときは `--headless --disable-gpu --disable-extensions --disable-component-update --hide-scrollbars
+  --virtual-time-budget=6000 --user-data-dir=<リポジトリ内の一時フォルダ> --window-size=1280,<高さ> --screenshot=<出力.png> <URL>` で PNG に写す
+  （暗い配色は `--force-dark-mode` を足す。`--headless=new` は 60 秒たっても終わらなかった）。プロファイルは使い終わったら消す。
+  2026-11-05 は入口ページ（`tools/portal/index.html`。コミット済みの版でも）が `--virtual-time-budget`・`--timeout` のどちらでも
+  40〜90 秒たっても終わらなかった（2026-11-03 は写せた。原因は確かめていない）。`guides/` のページは写せた。
+  2026-11-06 は `guides/video-generation.html` も、`file://` でも `http://127.0.0.1:8080/` でも 60〜90 秒で終わらなかった。
 
 ## モデル
 

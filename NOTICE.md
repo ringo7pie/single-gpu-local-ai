@@ -38,6 +38,8 @@ this project is not affiliated with or endorsed by them.
 | PixelArtistry-Watertight-Meshes | [pixelartistry/PixelArtistry-Watertight-Meshes](https://github.com/pixelartistry/PixelArtistry-Watertight-Meshes) `5b3a0e9d` | MIT（Copyright (c) 2026 PixelArtistry。一部は Comfy Org の MIT） | ワークフローを取得し、`adapt_workflows.py` が変換して使う。同梱しない |
 | WTiVo-WatertightVoxel とそのノード | [Mstafa-awad](https://github.com/Mstafa-awad/WTiVo-WatertightVoxel) | リポジトリは GPL-3.0。ファイルごとに Apache-2.0 / GPL-3.0-or-later（SPDX）。系譜（CelloCut・FaithC は Apache-2.0、CGAL は GPL、Eigen は MPL-2.0 ほか）は上流の `NOTICE`・`THIRD_PARTY_NOTICES.md` | CGAL を GPL で使うため、ビルド物は GPL の条件に従う。パッチの扱いは `tools/comfyui/patches/LICENSE-NOTICE.md` |
 | ComfyUI のそのほかのノード | `tools/comfyui/setup-server.sh` の一覧（Mstafa-awad 製 8 種・visualbruno/ComfyUI-Trellis2） | 各リポジトリの `LICENSE`（README の確認では GPL-3.0 または MIT） | 同梱しない |
+| ComfyUI-GGUF | [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) `6ea2651e` | Apache-2.0 | 動画生成の LTX 2.5（GGUF）を読むノード。同梱しない |
+| Kandinsky 6.0 の ComfyUI 拡張 | [kandinskylab/kandinsky-6](https://github.com/kandinskylab/kandinsky-6) `7ceeefad` の `comfyui/` | MIT（Copyright (c) 2026 Kandinsky Lab） | 動画生成の Kandinsky 6.0 Lite のノード。同梱しない |
 | Python の依存 | 各ツールの `requirements.lock.txt`。PyPI などから取得 | 各パッケージ | 同梱しない |
 
 ## 3. モデルの重み（同梱しない）
@@ -56,6 +58,11 @@ this project is not affiliated with or endorsed by them.
 | T5（t5-base。文章の符号化器） | [google-t5/t5-base](https://huggingface.co/google-t5/t5-base) | Apache-2.0（配布元の表示）。AudioCraft が文章を符号化するのに使う |
 | DINOv3 | Meta（`camenduru/dinov3-vitl16-pretrain-lvd1689m` は非公式ミラー） | Meta 独自のライセンス。**ミラーを使ってもライセンスは Meta のものに従う。地域制限の有無は上流でも未回答** |
 | 背景除去（BiRefNet） | [ZhengPeng7/BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) | MIT。RMBG-2.0（CC BY-NC 4.0）は使わない |
+| HunyuanVideo 1.5（720p・1080p 化） | [Comfy-Org/Hunyuan-Video-1.5](https://huggingface.co/Comfy-Org/Hunyuan-Video-1.5)（Tencent の重みの再パッケージ） | **Tencent Hunyuan Community License**（EU・英国・韓国は対象地域外。月間 1 億人を超えるサービスは別の許諾） |
+| LTX 2.5（distilled 22B の GGUF・文字エンコーダ・VAE） | [unsloth/LTX-2.5-GGUF](https://huggingface.co/unsloth/LTX-2.5-GGUF)（Lightricks の重みの量子化・再配布） | LTX-2 Community License（年商 1,000 万ドル以上の組織の商用利用は別契約） |
+| Kandinsky 6.0 Lite・Lite distill | [kandinskylab](https://huggingface.co/kandinskylab) | MIT |
+| MMAudio の音声 VAE（`v1-44.pth`。Kandinsky 6.0 が音声を作るのに使う） | [hkchengrex/MMAudio](https://huggingface.co/hkchengrex/MMAudio) | **CC BY-NC 4.0（非商用のみ）** |
+| 動画生成のそのほかの部品（Qwen2.5-VL 7B・byT5・SigCLIP・CLIP-L・HunyuanVideo の VAE・BigVGAN・Gemma 4 E2B） | `tools/comfyui/cfui/config.py` の `VIDEO_MODEL_FILES` の配布元 | 各配布元の表示に従う（個別には確かめていない） |
 
 ## 4. 利用上の制約（大事なもの）
 
@@ -69,6 +76,9 @@ this project is not affiliated with or endorsed by them.
   収益化するなら Hunyuan3D 側（上の地域制限に従う）を検討する。
 - **AudioCraft の重みは非商用**: MusicGen・AudioGen の重みは CC-BY-NC 4.0。コード（MIT）と重みのライセンスは別で、
   作った音を収益化する用途には使えない。個人の試作・研究・社内の検討に限る。
+- **動画生成（ComfyUI）**: HunyuanVideo 1.5 も Tencent Hunyuan Community License で、EU・英国・韓国は対象地域外。
+  このリポジトリは Tencent のコードも重みも同梱せず、取得先の URL だけを持つ。Kandinsky 6.0 で作った**音声付きの動画は非商用に限る**
+  （音声 VAE が CC BY-NC 4.0）。LTX 2.5 は LTX-2 Community License の条件に従う。
 - **GPL**: ComfyUI（GPL-3.0）と WTiVo（GPL-3.0 / CGAL）は同梱しないが、取得・ビルドした物を第三者へ配布するときは GPL に従う。
 
 ## 5. 評価の記録に含まれるモデルの出力

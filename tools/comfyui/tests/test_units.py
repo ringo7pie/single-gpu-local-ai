@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -556,6 +558,34 @@ def test_notes_ja_2k_note_follows_proxy_points() -> None:
     assert "約 35 GiB" in notes_ja.note_for(config.WORKFLOW_2K_FILE, 20_000_000)
     unmeasured = notes_ja.note_for(config.WORKFLOW_2K_FILE, 13_000_000)
     assert "この値では未計測" in unmeasured and "GiB（Blender" not in unmeasured.split("### 調整")[0].split("### 上流との違い")[1]
+
+
+PORTAL_GUIDE = TOOL_DIR.parent / "portal" / "guides" / "pixelartistry.html"
+SWITCH_TITLE = "Boolean (Switch to Trellis2)"
+
+
+def test_portal_guide_matches_config() -> None:
+    """入口ページの使い方のページ（tools/portal/guides/pixelartistry.html）が、写しの設定と食い違わない。"""
+    text = PORTAL_GUIDE.read_text(encoding="utf-8")
+    assert SWITCH_TITLE in text
+    if config.WTIVO_2K_PROXY_POINTS is not None:
+        assert f"{config.WTIVO_2K_PROXY_POINTS:,}" in text
+    assert "測定中" not in text, "実測の欄が埋まっていない"
+    # 日本語ノートもスイッチを同じ名前で案内し、ガイドへの道を書く
+    for file_name in config.WORKFLOW_FILES:
+        note = notes_ja.note_for(file_name)
+        assert "「使い方」のリンク" in note, file_name
+    assert SWITCH_TITLE in notes_ja.note_for("PixelArtistry_01_Image_to_Watertight_Mesh.json")
+
+
+def test_switch_title_in_guide_exists_in_upstream_workflows_when_vendor_exists() -> None:
+    source_dir = config.PIXELARTISTRY_DIR / "workflows"
+    if not source_dir.is_dir():
+        pytest.skip("vendor が無い")
+    for file_name in config.WORKFLOW_FILES:
+        workflow = json.loads((source_dir / file_name).read_text(encoding="utf-8"))
+        titles = [node.get("title") for node in workflow["nodes"] if node.get("type") == "PrimitiveBoolean"]
+        assert titles == [SWITCH_TITLE], file_name
 
 
 def test_config_2k_settings_are_consistent() -> None:
@@ -1180,3 +1210,365 @@ def test_service_example() -> None:
         "MemoryMax=48G",
     ):
         assert line in text.splitlines(), line
+
+
+# ---------------------------------------------------------------- 動画生成（2026-11-05）
+
+
+def test_video_model_table_is_consistent() -> None:
+    targets = set()
+    for group, subdir, file_name, repo, path_in_repo, size, sha in config.VIDEO_MODEL_FILES:
+        assert group in config.VIDEO_MODEL_GROUPS, file_name
+        assert group in config.VIDEO_MODEL_GROUP_LABELS, group
+        assert re.fullmatch(r"[0-9a-f]{64}", sha), file_name
+        assert size > 0, file_name
+        assert "/" in repo and not repo.startswith("/"), repo
+        # repo 内のファイル名と置き先のファイル名の末尾が同じ（Kandinsky の Diffusers 形式は置き先が入れ子）
+        assert path_in_repo.rsplit("/", 1)[-1] == file_name.rsplit("/", 1)[-1], file_name
+        target = f"{subdir}/{file_name}"
+        assert target not in targets, target
+        targets.add(target)
+    # 3D の重みと置き先が重ならない
+    assert not targets & {f"{entry[0]}/{entry[1]}" for entry in config.MODEL_FILES}
+    groups = {entry[0] for entry in config.VIDEO_MODEL_FILES}
+    assert groups == set(config.VIDEO_MODEL_GROUPS)
+
+
+def test_video_model_table_names_used_by_config_constants() -> None:
+    names = {entry[2] for entry in config.VIDEO_MODEL_FILES}
+    for name in (
+        config.LTX25_GGUF_FILE,
+        config.LTX25_TEXT_ENCODER_FILE,
+        config.LTX25_VIDEO_VAE_FILE,
+        config.HUNYUAN15_SR_FILE,
+        config.QWEN25_VL_FILE,
+        config.KANDINSKY6_LITE_FILE,
+        config.KANDINSKY6_LITE_DISTILL_FILE,
+    ):
+        assert name in names, name
+    assert config.LTX25_GGUF_FILE.endswith(".gguf")
+
+
+def test_selected_video_entries() -> None:
+    from cfui.cli import selected_video_entries
+
+    assert selected_video_entries(False, None) == []
+    assert selected_video_entries(True, None) == list(config.VIDEO_MODEL_FILES)
+    only_ltx = selected_video_entries(False, ["ltx25"])
+    assert only_ltx and {entry[0] for entry in only_ltx} == {"ltx25"}
+    both = selected_video_entries(True, ["ltx25", "kandinsky6"])
+    assert {entry[0] for entry in both} == {"ltx25", "kandinsky6"}
+
+
+def test_fetch_models_video_arguments() -> None:
+    parser = build_parser()
+    plain = parser.parse_args(["fetch-models"])
+    assert (plain.video, plain.group, plain.skip_3d, plain.verify) == (False, None, False, False)
+    video = parser.parse_args(["fetch-models", "--video", "--group", "ltx25", "--group", "kandinsky6", "--skip-3d"])
+    assert (video.video, video.group, video.skip_3d) == (True, ["ltx25", "kandinsky6"], True)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["fetch-models", "--group", "wan"])
+
+
+def test_video_model_rows_without_any_file_is_a_single_ok_row() -> None:
+    sizes = {f"{entry[1]}/{entry[2]}": None for entry in config.VIDEO_MODEL_FILES}
+    rows = checks.video_model_rows(config.VIDEO_MODEL_FILES, sizes, config.VIDEO_MODEL_GROUP_LABELS)
+    assert len(rows) == 1
+    assert rows[0][1] is True and "fetch-models --video" in rows[0][2]
+
+
+def test_video_model_rows_with_some_files_checks_every_file() -> None:
+    entries = config.VIDEO_MODEL_FILES
+    sizes: dict[str, int | None] = {f"{entry[1]}/{entry[2]}": None for entry in entries}
+    first, second = entries[0], entries[1]
+    sizes[f"{first[1]}/{first[2]}"] = first[5]
+    sizes[f"{second[1]}/{second[2]}"] = second[5] - 1  # 取りかけ
+    rows = checks.video_model_rows(entries, sizes, config.VIDEO_MODEL_GROUP_LABELS)
+    assert len(rows) == len(entries)
+    assert rows[0][1] is True
+    assert rows[1][1] is False and "大きさが違います" in rows[1][2]
+    missing = [row for row in rows[2:] if not row[1]]
+    assert missing and all("--group" in row[2] for row in missing)
+    assert config.VIDEO_MODEL_GROUP_LABELS[first[0]] in rows[0][0]
+
+
+def test_classify_node_link_and_video_workflows() -> None:
+    assert checks.classify_node_link(None, "/x")[0] is False
+    assert checks.classify_node_link("/y", "/x")[0] is False
+    assert checks.classify_node_link("/x", "/x")[0] is True
+    expected = config.VIDEO_WORKFLOW_FILES
+    ok, detail = checks.classify_video_workflows(list(expected), expected)
+    assert ok and str(len(expected)) in detail
+    ok, detail = checks.classify_video_workflows(list(expected[1:]), expected)
+    assert not ok and expected[0] in detail
+
+
+def test_video_workflow_names_are_unique_and_point_to_known_bases() -> None:
+    names = [entry[0] for entry in config.VIDEO_WORKFLOWS]
+    assert len(names) == len(set(names)) == 8
+    assert all(name.endswith(".json") and "/" not in name for name in names)
+    kinds = [entry[2] for entry in config.VIDEO_WORKFLOWS]
+    assert len(kinds) == len(set(kinds))
+
+
+def test_setup_script_pins_kandinsky6_like_config() -> None:
+    text = (TOOL_DIR / "setup-server.sh").read_text(encoding="utf-8")
+    assert f'KANDINSKY6_URL="{config.KANDINSKY6_SRC_URL}"' in text
+    assert f'KANDINSKY6_COMMIT="{config.KANDINSKY6_SRC_COMMIT}"' in text
+    assert f'KANDINSKY6_LINK_TARGET="{config.KANDINSKY6_NODE_LINK_TARGET}"' in text
+    # リンクの中身は custom_nodes/ から見て vendor/kandinsky-6/comfyui を指す
+    assert (config.CUSTOM_NODES_DIR / config.KANDINSKY6_NODE_LINK_TARGET).resolve() == (
+        config.KANDINSKY6_SRC_DIR / "comfyui"
+    ).resolve()
+    assert "adapt_video_workflows.py" in text
+    assert "fetch-models --video" in text
+
+
+def test_requirements_in_reads_video_node_requirements() -> None:
+    text = (TOOL_DIR / "requirements.in").read_text(encoding="utf-8")
+    assert f"-r vendor/ComfyUI/custom_nodes/{config.GGUF_NODE_NAME}/requirements.txt" in text
+    assert "-r vendor/kandinsky-6/comfyui/requirements.txt" in text
+    lock = (TOOL_DIR / "requirements.lock.txt").read_text(encoding="utf-8")
+    for package in ("gguf", "librosa", "loguru", "omegaconf"):
+        assert re.search(rf"^{package}==", lock, flags=re.MULTILINE), package
+
+
+# ---------------------------------------------------------------- 動画の写し（cfui.video_workflows / adapt_video_workflows.py）
+
+import adapt_video_workflows  # noqa: E402
+from cfui import video_workflows  # noqa: E402
+
+
+def _video_base(base_name: str) -> dict | None:
+    path = adapt_video_workflows.find_base(base_name)
+    return None if path is None else json.loads(path.read_text(encoding="utf-8"))
+
+
+def _all_nodes(workflow: dict) -> list[dict]:
+    nodes = list(workflow["nodes"])
+    for definition in (workflow.get("definitions") or {}).get("subgraphs") or []:
+        nodes.extend(definition.get("nodes") or [])
+    return nodes
+
+
+@pytest.mark.parametrize("file_name,base_name,kind", config.VIDEO_WORKFLOWS)
+def test_video_workflow_from_real_base_when_installed(file_name: str, base_name: str, kind: str) -> None:
+    base = _video_base(base_name)
+    if base is None:
+        pytest.skip("土台（同梱テンプレートか vendor/kandinsky-6）が無い（setup-server.sh の前）")
+    original = copy.deepcopy(base)
+    adapted = video_workflows.make_video_workflow(base, kind)
+    assert base == original, "土台を書き換えた"
+    assert video_workflows.make_video_workflow(adapted, kind) == adapted, "2 回当てると変わる"
+    assert adapted["id"] != base["id"]
+    nodes = _all_nodes(adapted)
+    notes = [node for node in adapted["nodes"] if node.get("title") == video_workflows.JA_NOTE_TITLE]
+    assert len(notes) == 1 and notes[0]["widgets_values"] == [notes_ja.video_note_for(kind)]
+    stem = file_name.rsplit(".", 1)[0]
+    saves = [node for node in adapted["nodes"] if node["type"] == "SaveVideo"]
+    assert any(node["widgets_values"][0] == f"video/{stem}" for node in saves)
+    # 写しが使う重みの名前は、どれも fetch-models --video が取るもの（gated な公式の重みを指さない）
+    downloaded = {entry[2] for entry in config.VIDEO_MODEL_FILES}
+    loader_values = {
+        str(value)
+        for node in nodes
+        if node.get("mode", 0) != 4 and node["type"] in ("UNETLoader", "UnetLoaderGGUF", "CLIPLoader", "DualCLIPLoader", "VAELoader", "CLIPVisionLoader", "LatentUpscaleModelLoader")
+        for value in (node.get("widgets_values") or [])
+        if str(value).endswith((".safetensors", ".gguf"))
+    }
+    assert loader_values and loader_values <= downloaded, sorted(loader_values - downloaded)
+    # properties.models（画面の「足りない重み」の案内）も、置き先からの相対パスで取得対象に含まれる
+    downloaded_paths = {f"{entry[1]}/{entry[2]}" for entry in config.VIDEO_MODEL_FILES}
+    referenced = {
+        f"{model['directory']}/{model['name']}"
+        for node in nodes
+        for model in (node.get("properties") or {}).get("models") or []
+    }
+    assert referenced <= downloaded_paths, sorted(referenced - downloaded_paths)
+
+
+def test_ltx_copy_uses_gguf_and_ungated_files_when_installed() -> None:
+    base = _video_base("video_ltx2_5_t2v.json")
+    if base is None:
+        pytest.skip("同梱テンプレートが無い")
+    adapted = video_workflows.make_video_workflow(base, "ltx_t2v")
+    definition = adapted["definitions"]["subgraphs"][0]
+    types = [node["type"] for node in definition["nodes"]]
+    assert "UNETLoader" not in types and types.count("UnetLoaderGGUF") == 1
+    instance = next(node for node in adapted["nodes"] if node["type"] == definition["id"])
+    values = instance["widgets_values"]
+    assert config.LTX25_GGUF_FILE in values
+    assert config.LTX25_TEXT_ENCODER_FILE in values
+    assert config.LTX25_VIDEO_VAE_FILE in values
+    assert values[video_workflows._promoted_index(definition, "value")] is False  # Prompt Enhance は切ったまま
+
+
+@pytest.mark.parametrize("kind,steps,cfg,scaling", [
+    ("kandinsky_lite_t2v", 50, 5.0, 0.5302),
+    ("kandinsky_distill_i2v", 10, 1.0, 0.417),
+])
+def test_kandinsky_copy_removes_beautify_and_sr_when_installed(kind: str, steps: int, cfg: float, scaling: float) -> None:
+    base_name = next(entry[1] for entry in config.VIDEO_WORKFLOWS if entry[2] == kind)
+    base = _video_base(base_name)
+    if base is None:
+        pytest.skip("vendor/kandinsky-6 が無い")
+    adapted = video_workflows.make_video_workflow(base, kind)
+    types = [node["type"] for node in adapted["nodes"]]
+    assert not set(types) & video_workflows.KANDINSKY_REMOVED_TYPES
+    assert types.count("UNETLoader") == 1 and types.count("CLIPLoader") == 0
+    by_type = {node["type"]: node for node in adapted["nodes"]}
+    expected_model = config.KANDINSKY6_LITE_DISTILL_FILE if "distill" in kind else config.KANDINSKY6_LITE_FILE
+    assert by_type["UNETLoader"]["widgets_values"] == [expected_model, "default"]
+    assert by_type["DualCLIPLoader"]["widgets_values"][0] == config.QWEN25_VL_FILE
+    assert by_type["Kandinsky6MagCache"]["mode"] == 4
+    assert by_type["Kandinsky6Sampler"]["widgets_values"][2:4] == [steps, cfg]
+    assert by_type["Kandinsky6AudioVAELoader"]["widgets_values"][3] == scaling
+    # どのリンクも残っているノードどうしを結び、CreateVideo はデコードと EmptyLatent の fps を直に受ける
+    ids = {node["id"] for node in adapted["nodes"]}
+    assert all(link[1] in ids and link[3] in ids for link in adapted["links"])
+    links = {link[0]: link for link in adapted["links"]}
+    create = by_type["CreateVideo"]
+    sources = {item["name"]: by_type_of(adapted, links[item["link"]][1]) for item in create["inputs"] if item.get("link") is not None}
+    assert sources == {"images": "VAEDecode", "audio": "Kandinsky6AudioVAEDecode", "fps": "Kandinsky6EmptyLatent"}
+    positive = next(node for node in adapted["nodes"] if node.get("title") == config.KANDINSKY6_PROMPT_TITLE)
+    assert positive["type"] == "Kandinsky6TextEncode"
+    assert all(item.get("link") is None for item in positive["inputs"] if item["name"] in ("video_caption", "audio_caption"))
+    assert positive["widgets_values"][0] and len(positive["widgets_values"]) == 2
+
+
+def by_type_of(workflow: dict, node_id: int) -> str:
+    return next(node["type"] for node in workflow["nodes"] if node["id"] == node_id)
+
+
+def test_make_video_workflow_rejects_unexpected_shapes() -> None:
+    with pytest.raises(workflows.WorkflowFormatError):
+        video_workflows.make_video_workflow({"links": []}, "hunyuan_t2v")
+    with pytest.raises(workflows.WorkflowFormatError):
+        video_workflows.make_video_workflow({"nodes": [{"id": 1, "type": "SaveVideo", "pos": [0, 0], "widgets_values": ["x"]}]}, "hunyuan_t2v")
+    with pytest.raises(workflows.WorkflowFormatError):
+        video_workflows.make_video_workflow({"nodes": [{"id": 1, "type": "SaveVideo", "pos": [0, 0]}]}, "ltx_t2v")
+    with pytest.raises(KeyError):
+        video_workflows.make_video_workflow({"nodes": []}, "wan_t2v")
+
+
+def test_video_notes_cover_every_copy_and_name_the_files() -> None:
+    for _file_name, _base, kind in config.VIDEO_WORKFLOWS:
+        note = notes_ja.video_note_for(kind)
+        assert note.startswith("## 使い方（この機体）")
+        assert "使い方（動画生成）" in note
+    assert config.LTX25_GGUF_FILE in notes_ja.video_note_for("ltx_t2v")
+    assert "CC BY-NC 4.0" in notes_ja.video_note_for("kandinsky_lite_t2v")
+    # Kandinsky のノートは、写しで付けたプロンプトのノードの題名で指す（上流の題名は写しに残らない）
+    for kind in ("kandinsky_lite_t2v", "kandinsky_lite_i2v", "kandinsky_distill_t2v", "kandinsky_distill_i2v"):
+        note = notes_ja.video_note_for(kind)
+        assert f"**{config.KANDINSKY6_PROMPT_TITLE}**" in note
+        assert "Encode expanded" not in note
+
+
+def _fake_bases(tmp_path: Path) -> dict[str, Path]:
+    """土台の代わりに、各種類の変換が通る最小の形を置く（実物が無くても adapt_all を試せるように）。"""
+
+    paths = {}
+    for _file_name, base_name, kind in config.VIDEO_WORKFLOWS:
+        real = adapt_video_workflows.find_base(base_name)
+        if real is None:
+            return {}
+        paths[base_name] = real
+    return paths
+
+
+def test_adapt_video_all_writes_keeps_user_edits_and_refreshes_notes(tmp_path: Path) -> None:
+    bases = _fake_bases(tmp_path)
+    if not bases:
+        pytest.skip("土台が無い（setup-server.sh の前）")
+    dest = tmp_path / "Video"
+    results, problems = adapt_video_workflows.adapt_all(dest, force=False)
+    assert not problems and [status for _path, status in results] == ["written"] * 8
+    results, _problems = adapt_video_workflows.adapt_all(dest, force=False)
+    assert [status for _path, status in results] == ["unchanged"] * 8
+    # 画面で手直し（プロンプトを変えた）した写しは上書きしない。--force なら上書き
+    edited = dest / config.VIDEO_WORKFLOW_FILES[0]
+    workflow = json.loads(edited.read_text(encoding="utf-8"))
+    workflow["nodes"][0]["widgets_values"] = ["edited"] + list(workflow["nodes"][0].get("widgets_values") or [])[1:]
+    edited.write_text(workflows.dump_workflow(workflow), encoding="utf-8")
+    statuses = dict((path.name, status) for path, status in adapt_video_workflows.adapt_all(dest, force=False)[0])
+    assert statuses[edited.name] == "kept"
+    assert dict((path.name, status) for path, status in adapt_video_workflows.adapt_all(dest, force=True)[0])[edited.name] == "written"
+    # 日本語ノートの文面だけが古い写しは、今の版へ書き換える
+    stale = dest / config.VIDEO_WORKFLOW_FILES[1]
+    workflow = json.loads(stale.read_text(encoding="utf-8"))
+    note = next(node for node in workflow["nodes"] if node.get("title") == video_workflows.JA_NOTE_TITLE)
+    note["widgets_values"] = ["古いノート"]
+    stale.write_text(workflows.dump_workflow(workflow), encoding="utf-8")
+    statuses = dict((path.name, status) for path, status in adapt_video_workflows.adapt_all(dest, force=False)[0])
+    assert statuses[stale.name] == "migrated"
+
+
+def test_adapt_video_reports_missing_base(tmp_path: Path) -> None:
+    results, problems = adapt_video_workflows.adapt_all(tmp_path, force=False, find=lambda _name: None)
+    assert results == [] and len(problems) == 8
+    assert adapt_video_workflows.main(["--dest", str(tmp_path)]) in (0, 1)
+
+
+def test_portal_video_guide_matches_config() -> None:
+    """入口ページの動画生成の使い方（tools/portal/guides/video-generation.html）が、写しと重みの設定と食い違わない。"""
+    text = (PORTAL_GUIDE.parent / "video-generation.html").read_text(encoding="utf-8")
+    for file_name in config.VIDEO_WORKFLOW_FILES:
+        stem = file_name.rsplit(".", 1)[0]
+        # 表は T2V の名前と「_I2V」の略記を使うので、種類の名前（_T2V / _I2V を除いた部分）が出ていればよい
+        assert stem.rsplit("_", 1)[0] in text, stem
+    assert "UD-Q4_K_XL" in config.LTX25_GGUF_FILE and "UD-Q4_K_XL" in text
+    assert "fetch-models --video" in text
+    assert f"「{config.KANDINSKY6_PROMPT_TITLE}」" in text
+    for group in config.VIDEO_MODEL_GROUPS:
+        assert f"--group {group}" in text or f"<code>{group}</code>" in text, group
+    for _file_name, _base, kind in config.VIDEO_WORKFLOWS:
+        assert "使い方（動画生成）" in notes_ja.video_note_for(kind)
+
+
+# ---------------------------------------------------------------- scripts/wait-gpu-idle.sh（偽の nvidia-smi で呼ぶ）
+def _fake_nvidia_smi(bin_dir: Path, pid: int) -> None:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake = bin_dir / "nvidia-smi"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"$*\" in\n"
+        "  *utilization.gpu*) echo 0 ;;\n"
+        f"  *query-compute-apps*) echo '{pid}, python, 452 MiB' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+
+def _run_wait_gpu_idle(bin_dir: Path, *allow: str) -> subprocess.CompletedProcess[str]:
+    args = ["bash", str(TOOL_DIR / "scripts" / "wait-gpu-idle.sh"), "--interval", "0.1", "--required", "2"]
+    for item in allow:
+        args += ["--allow", item]
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    try:
+        return subprocess.run(args, env=env, capture_output=True, text=True, timeout=3, check=False)
+    except subprocess.TimeoutExpired as expired:
+        out = expired.stdout.decode() if isinstance(expired.stdout, bytes) else (expired.stdout or "")
+        return subprocess.CompletedProcess(args, 124, out, "")
+
+
+def test_wait_gpu_idle_allow_matches_command_line(tmp_path: Path) -> None:
+    """nvidia-smi のプロセス名が `python` としか出ない常駐プロセスも、コマンドラインの文字列で許可できる。"""
+
+    marker = "localai-test-resident-scheduler"
+    resident = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", marker])
+    try:
+        _fake_nvidia_smi(tmp_path / "bin", resident.pid)
+        allowed = _run_wait_gpu_idle(tmp_path / "bin", marker)
+        assert allowed.returncode == 0
+        assert allowed.stdout.rstrip().endswith("GPU_IDLE")
+        assert "idle_count=2/2" in allowed.stdout
+
+        blocked = _run_wait_gpu_idle(tmp_path / "bin", "ai_finance")
+        assert blocked.returncode == 124
+        assert "GPU_IDLE" not in blocked.stdout
+        assert "idle_count=0/2" in blocked.stdout
+    finally:
+        resident.kill()
+        resident.wait()

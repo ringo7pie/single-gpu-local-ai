@@ -30,6 +30,12 @@ rembg[cpu]
 # install.py の pip は「既に入っている」で終わるようにする。
 -r vendor/ComfyUI/custom_nodes/ComfyUI-Mesh-Quad-Reconstruct/requirements.txt
 
+# 動画生成（2026-11-05）。city96/ComfyUI-GGUF（LTX 2.5 の GGUF を読む。gguf・sentencepiece・protobuf）と、
+# Kandinsky 6.0 の拡張（kandinsky-6/comfyui。librosa は音声を条件にする機能でだけ読むが、上流の指定どおり入れる。
+# loguru・omegaconf は comfyui/ のコードからは読まれていない）。どれも既存の版を変えずに足せることを uv の --dry-run で確かめた。
+-r vendor/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
+-r vendor/kandinsky-6/comfyui/requirements.txt
+
 # ネイティブ拡張の実行時依存。拡張は --no-deps で入れるため、ここで補う。
 #   o_voxel: plyfile / zstandard / easydict / trimesh / tqdm（cv2 は上の opencv-python）
 #   flex_gemm: filelock（triton は torch と一緒に入る）

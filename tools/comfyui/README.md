@@ -7,6 +7,9 @@
 
 `tools/pixal3d`（Pixal3D の UI）と構成・語り口を揃えている。
 
+2026-11-05 から、文章・画像 → 動画の 3 モデル（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）のワークフロー 8 本も入れている
+（画面の Workflows → Video。下の「動画生成」）。
+
 ## ポート
 
 - **8188**: ComfyUI（このツール。`--listen 0.0.0.0`）
@@ -16,6 +19,13 @@
 サーバー IP は `<server-ip>`（例: 192.168.1.10）。起動後は `http://<server-ip>:8188` → 左の Workflows → `Image_to_3D`（画像 1 枚から 3D。下の「画像 1 枚から 3D」）か `PixelArtistry`（防水メッシュ）。
 `PixelArtistry` の 4 本は、開くと画像の置き場（Load Image）の真上に緑の日本語ノート「使い方（日本語・この機体）」があり、
 手順・この機体での前提・実測の目安を書いている（下の「ワークフローの写し方」）。
+利用者向けの使い方（Pixal3D と TRELLIS.2 の違い・切り替え方・ワークフロー別の手順・実測）は、入口ページの ComfyUI のカードの
+「使い方」から開く `http://<server-ip>:8080/guides/pixelartistry.html`（本体は `tools/portal/guides/pixelartistry.html`）。
+
+形を作るモデルは、ワークフローのグループ「Switch Model Here」のノード **「Boolean (Switch to Trellis2)」**（id 316）で選ぶ。
+false = Pixal3D（01・01b・02・Image_to_3D の既定）、true = TRELLIS.2（03 の既定。03 は TRELLIS.2 でないと黒いテクスチャになる）。
+Image_to_3D のアプリモードの入力にこのスイッチは無く、グラフ表示で切り替える。ComfyUI は 2 つの重みを同じ型 `Trellis2` として読み
+（`comfy/model_detection.py`。Pixal3D は注意層に `proj_linear` を持つ）、VAE・DINOv3・構造 → 形 → テクスチャの流れは共通。
 
 ## 固定している版
 
@@ -29,6 +39,8 @@
 | visualbruno/CuMesh | `d10e54c30ddd03d11472c1431693f985501c7966` |
 | visualbruno/FlexGEMM | `db388bd17c34abc697792aa718dca780734c2783` |
 | visualbruno/TRELLIS.2（o-voxel のビルド元） | `65d1e13b4a92296036044df0633242bb9e95abf6` |
+| city96/ComfyUI-GGUF（動画生成。LTX 2.5 の GGUF を読む） | `6ea2651e7df66d7585f6ffee804b20e92fb38b8a`（2026-01-12 の HEAD） |
+| kandinskylab/kandinsky-6（動画生成。`comfyui/` が Kandinsky 6.0 の公式 ComfyUI 拡張 v1.0.2） | `7ceeefad7fb625011f7db602c43893a989f19c15`（2026-10-25 の HEAD） |
 | NVlabs/nvdiffrast | `253ac4fcea7de5f396371124af597e6cc957bfae`（v0.4.0） |
 | Python / torch | uv 管理の 3.12.14 / `torch==2.9.1+cu126`、`torchvision==0.24.1+cu126`、`torchaudio==2.9.1+cu126` |
 | CUDA（拡張のビルド） | `/usr/local/cuda-12.6`、`TORCH_CUDA_ARCH_LIST=8.0` |
@@ -50,6 +62,8 @@ tools/comfyui/setup-server.sh
 オプション:
 
 - `--skip-models`: 重みの取得を省略する（あとで `run-comfyui fetch-models`）
+- `--video`: 動画生成の重み（21 ファイル、合計 約 111 GiB）も取る（`run-comfyui fetch-models --video` と同じ）。
+  付けなくても、動画生成のノード・依存・ワークフローの写しは入る
 - `--build-only`: venv・上流取得・torch・依存・CUDA 拡張・WTiVo・cfui までで止める
 - `--fallback-workflows`: 予備案（WTiVo を外したもの）の写しも書き出す（WTiVo が使えないときは付けなくても書く）
 
@@ -58,14 +72,15 @@ tools/comfyui/setup-server.sh
 1. CUDA 12.6 の確認
 2. uv と venv（`tools/comfyui/.venv`、uv 管理の Python 3.12）
 3. ComfyUI 本体を `vendor/ComfyUI` に固定コミットで取得（[1/8] の古さの判定）
-4. custom_nodes 10 個を固定コミットで取得（[2/8]）
+4. custom_nodes 11 個を固定コミットで取得（[2/8]）。動画生成の Kandinsky 6.0 の拡張は `vendor/kandinsky-6` に取り、
+   `custom_nodes/kandinsky6` からシンボリックリンクで `vendor/kandinsky-6/comfyui` を指す
 5. torch（cu126）
 6. 依存（`requirements.lock.txt`。torch は入れ替えない制約を付ける）（[4/8]）
 7. CUDA 拡張（CuMesh / FlexGEMM / o-voxel / nvdiffrast）をソースからビルド
 8. ComfyUI-Mesh-Quad-Reconstruct の `install.py`（[4/8]）と自前パッケージ cfui
 9. WTiVo の Linux ビルド（`scripts/build-wtivo.sh`）（[3/8] の WTiVo の版選び）
-10. 重み 9 ファイルとサンプル画像（[7/8]、[6/8] の画像）
-11. ワークフロー 4 本を写す（`scripts/adapt_workflows.py`）（[6/8]）
+10. 重み 9 ファイルとサンプル画像（[7/8]、[6/8] の画像）。`--video` なら動画生成の 21 ファイルと I2V の入力画像も
+11. ワークフロー 4 本を写す（`scripts/adapt_workflows.py`）（[6/8]）と、動画生成の 8 本を写す（`scripts/adapt_video_workflows.py`）
 12. systemd ユニットの配置・Blender の空の設定・env ファイル・doctor（[5/8] の自己試験、[8/8] の Blender）
 
 必要な apt パッケージ（WTiVo のビルド用。利用者が sudo で入れる）:
@@ -420,6 +435,29 @@ tools/comfyui/.venv/bin/python tools/comfyui/scripts/measure_mesh.py OUT.glb --r
   （2026-10-03 に 02 で起きた）。ベイク後の GLB は `output/LODTailorBakeForger/latest/baked_low.glb`
   （回ごとに消して書き直される）を直接測る。
 
+### TRELLIS.2 で形を作った実機試験（2026-11-03、`--backend trellis2`。入力・seed・`--free-before` は下の再確認と同じ）
+
+この機体で画像から形を作る段を TRELLIS.2 で流したのは、これが初めて（それまでの TRELLIS.2 は 03 だけ）。写しはそのまま
+（01b は `proxy_points` 20M）。作業用の手順は `logs/gpu-tests.sh trellis`（追跡しない）。
+
+| | 01（1536） | 02（テクスチャ） | Image_to_3D（既定） | 01b（2048 / 20M） |
+|---|---|---|---|---|
+| 結果 | 成功 298 秒（Pixal3D 240 秒） | 成功 520 秒（同 374 秒）。**最終 GLB が閉じない** | 成功 222 秒（Pixal3D 167〜173 秒、10/25） | 成功 432 秒（同 361 秒） |
+| cgroup の memory.peak / anon | 22.8 / 17.9 GiB | 22.9 / 17.5 GiB | 12.7 / 4.9 GiB | 31.4 / 27.9 GiB |
+| Blender の RSS | 10.4 GiB | 9.6 GiB | （使わない） | 18.0 GiB |
+| VRAM のピーク | 11,677 MiB | 11,677 MiB | 11,265 MiB | 13,443 MiB |
+| WTiVo | 26,360,040 面・72 秒（Pixal3D 20.4M 面） | 69.9 秒 | （使わない） | 47,559,456 面・144 秒（同 39.6M 面） |
+| 最終 GLB（溶接後） | 3,451,980 面・境界辺 0・非多様体辺 0・殻 16 | 高ポリ 3,445,560 面・境界辺 0・**非多様体辺 80**・殻 10 / 低ポリ 29,984 面・**境界辺 36**・殻 13 | 695,263 面・境界辺 199・非多様体辺 5,917・殻 75（Image_to_3D は防水を約束しない） | 3,218,060 面・境界辺 0・非多様体辺 0・殻 49 |
+
+- 02 の低ポリ: LODTailor（30k）の後が `watertight=False bodies=15`。Fast Merge（TEXTURE_SAFE）が距離 0.0001〜0.01 で 100 回試しても
+  `geometric_watertight=False` のままで、`NOT WATERTIGHT ... RETURNING ORIGINAL GLB UNCHANGED` を出して入力のまま返した（ノードの時間 62 秒）。
+  Pixal3D の 02 は同じ段で `bodies=4` になり、7 回目（距離 0.0007）で閉じた。Run をやり直して（seed を変えて）閉じるかは試していない。
+- 02 の高ポリは、溶接前は境界辺 396,900・殻 3,222（UV の継ぎ目で頂点が分かれている）で、溶接すると境界辺 0・非多様体辺 80 になる。
+  Pixal3D の 02 の高ポリは溶接後に非多様体辺 0・殻 1 だった。
+- 時間の差は形を作る段: 最後の KSampler が 79.8 秒（Pixal3D 47.4 秒）、Quad Reconstruct が 41.6 秒（同 15.4 秒）。TRELLIS.2 は
+  `Pixal3DConditioning`（17 秒）を通らない。
+- 01b は TRELLIS.2 でも RAM の歯止め（43 GiB）に当たらず、`proxy_points` 20M のままで通った。
+
 ### 実機試験の結果（2026-11-03、再確認。入力・seed・`--free-before` は 10/3 と同じ、タップなし）
 
 `run-comfyui doctor`（WTiVo の自己試験込み）は全項目 OK（穴あき球 5,060 面 → 602,628 面、`watertight=True`、4 秒）。
@@ -493,7 +531,93 @@ uvx --with pytest --with numpy --with scipy --with trimesh pytest tools/comfyui/
 
 GPU もネットワークも使わない（ワークフローの変換・doctor の判定関数・メッシュの指標）。`.venv` には pytest を入れない。
 
+## 動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast、2026-11-05）
+
+利用者向けの使い方は入口ページの ComfyUI のカードの「使い方（動画生成）」（`tools/portal/guides/video-generation.html`）。
+ここには導入と、A30 に合わせて決めたことの根拠を書く。
+
+### ワークフローの写し（`vendor/ComfyUI/user/default/workflows/Video/`）
+
+| 写し | 土台 | 変えたところ |
+|---|---|---|
+| `HunyuanVideo15_T2V` / `_I2V` | 同梱テンプレート `video_hunyuan_video_1.5_720p_t2v` / `_i2v` | 1080p 化の後段（既定で bypass）の変換器を fp8_scaled に |
+| `LTX25_Fast_T2V` / `_I2V` | 同梱テンプレート `video_ltx2_5_t2v` / `_i2v`（subgraph 入り） | 変換器を Unet Loader (GGUF) の `ltx-2.5-22b-distilled-UD-Q4_K_XL.gguf` に、文字エンコーダを bf16 に、動画の VAE を畳み込み版に |
+| `Kandinsky6_Lite_T2V` / `_I2V`、`Kandinsky6_LiteDistill_T2V` / `_I2V` | 拡張の `example_workflows/` の 2 本 | Pro distill を Lite / Lite distill に。プロンプトの書き足し（Qwen3.5 9B）と超解像（kandinsky6-sr）を外す。MagCache を bypass。サンプラー・音声 VAE の倍率を上流 README の Lite の値に（Lite 50 ステップ・CFG 5・0.5302、distill 10・1・0.417）。Qwen2.5-VL を fp8_scaled に |
+
+- 変換は `cfui/video_workflows.py`、書き出しは `scripts/adapt_video_workflows.py`（`setup-server.sh` の [11/12]）。
+  画面で手直しした写しは上書きしない（日本語ノートの文面だけが古い写しは書き換える。`--force` で上書き）。
+- どの写しも左上に日本語ノート「使い方（日本語・この機体）」（本文は `cfui/notes_ja.py` の `video_note_for`）を持つ。
+- I2V の既定の入力画像は、同梱テンプレートと同じ画像（`fetch-models --video` が `input/` に置く）と、拡張が起動時に `input/kandinsky6/` に写す例。
+
+### 重み（`run-comfyui fetch-models --video [--group hunyuanvideo15|ltx25|kandinsky6] [--skip-3d]`）
+
+一覧・バイト数・sha256 は `cfui/config.py` の `VIDEO_MODEL_FILES`（2026-11-05 に HF の tree API で確認）。どれも gated ではなく、HF のトークンは要らない。
+
+- **A30 は FP8 の演算器を持たない。** fp8_scaled と GGUF の重みは、ComfyUI が計算の直前に bf16 へ戻す（Pixal3D の int8 convrot と同じ経路）。
+- **LTX 2.5 Fast** は LTX 2.5 の distilled 版（22B）。公式 `Lightricks/LTX-2.5` は gated で、int8 でも 21.5 GB。
+  ungated な `unsloth/LTX-2.5-GGUF` の UD-Q4_K_XL（14.0 GB。unsloth の推奨）と、同じ repo の文字エンコーダ bf16・VAE・アップスケーラを使う。
+  GGUF のヘッダ（`general.architecture=ltxv`）を範囲取得で読み、ComfyUI-GGUF が受け付ける名前であること、
+  city96/ComfyUI-GGUF issue #477（BF16 の非層パラメータが packed のまま残る）の 3 つのテンソルがこのファイルでは F32 であることを確かめた。
+- **ComfyUI-GGUF の issue #488**（ComfyUI 0.39 で `Linear(input_act=...)` を受けられない）は、v0.41.1 では起きないと判断して当て物をしていない。
+  v0.41.1 の `comfy/ops.py` の `linear_input_act` は、重みが TensorWiseINT8 のとき以外は `linear(x)` をそのまま呼ぶ（GGUF の重みはこちら）。
+  ほかに `input_act=` をキーワードで渡す呼び出しは無い（2026-11-05 に grep）。
+- **Kandinsky 6.0 Lite** は 3B で bf16 のまま載る。Qwen2.5-VL 7B は、Kandinsky 5 の同梱テンプレートと同じく fp8_scaled を `DualCLIPLoader(kandinsky5)` で読む。
+
+### Kandinsky 6.0 の拡張
+
+- 上流の README は `comfyui/` の中身を `custom_nodes/kandinsky6` へ写す手順。固定コミットとの照合を残すため、repo ごと `vendor/kandinsky-6` に置いてリンクする。
+- `register()` が `comfy.model_detection.detect_unet_config` を包んで Kandinsky 6 を見分ける（本体へのパッチは無い）。
+  音声 VAE の置き場は `models/audio_vae`（`nodes.py` が `kandinsky6_audio_vae` として足す）。
+- 依存の librosa は音声を条件にする機能でだけ読む。loguru・omegaconf は `comfyui/` のコードからは読まれていないが、上流の指定どおり入れた
+  （`uv pip install --dry-run` で、既存の版を変えずに 14 件を足すだけと確かめた）。
+- MagCache は Pro 専用（`model_dim` が違うと止まる）なので、Lite の写しでは bypass にしている。
+
+### `run_workflow.py` の subgraph の展開
+
+LTX 2.5 のテンプレートは subgraph を使う。`run_workflow.py` は subgraph を中のノードへ展開する（id は画面と同じ `外の id:中の id`）。
+外のノードの widgets_values は、widget につながる subgraph の入力の順に並ぶ（外のノードの inputs に無い入力の値も入っている）。
+入れ子と、mode が 0 以外の subgraph は未対応として止める。
+`--seed` は名前が seed の入力（`seed`・`noise_seed`・`sampling_mode.seed`）だけを変える。PrimitiveInt の `value` も
+control_after_generate を持つが、LTX 2.5 では秒数・fps なので変えない（2026-11-05 まではすべての control の入力を変えていた）。
+
+### 実機試験の結果（2026-11-06、`run_workflow.py run --seed 42 --free-before --monitor`、既定の設定のまま 8 本を続けて）
+
+作業用の `logs/gpu-video-tests.sh`（追跡しない）で、入口ページから ComfyUI を起動して流した。どの回も成功し、
+プロンプトどおりの破綻のない映像になった（各回の最初・中ほど・最後のコマを並べて目で確かめた。I2V は最初のコマが入力画像と一致する）。
+CUDA out of memory・部分ロードの失敗は無い。記録は `output/localai_runs/<tag>/`（`run.json`・`resources.csv`・`video.json`・`journal.log`）。
+
+| 写し | 出力（mp4、24 fps） | 時間 | サンプラー | VRAM ピーク | RAM（cgroup の anon） | 音声 |
+|---|---|---:|---|---:|---:|---|
+| `Kandinsky6_LiteDistill_T2V` | 864×480・121 コマ・5.0 秒 | 2.4 分 | 10 ステップ | 24,125 MiB | 10.2 GiB | AAC 44.1 kHz モノラル |
+| `Kandinsky6_LiteDistill_I2V` | 同上 | 2.4 分 | 10 ステップ | 24,125 MiB | 9.3 GiB | 同上 |
+| `Kandinsky6_Lite_T2V` | 同上 | 18.6 分 | 50 × 21.6 秒 | 24,125 MiB | 9.6 GiB | 同上 |
+| `Kandinsky6_Lite_I2V` | 同上 | 19.3 分 | 50 × 22.5 秒 | 24,125 MiB | 9.3 GiB | 同上 |
+| `LTX25_Fast_T2V` | 1280×704・121 コマ・5.0 秒 | 1.6 分 | 8 × 2.4 秒 ＋ 2 倍化 3 × 7.0 秒 | 23,937 MiB | 11.0 GiB | AAC 48 kHz ステレオ |
+| `LTX25_Fast_I2V` | 同上 | 1.5 分 | 8 × 2.5 秒 ＋ 3 × 7.4 秒 | 23,651 MiB | 16.5 GiB | 同上 |
+| `HunyuanVideo15_T2V` | 1280×720・121 コマ・5.0 秒 | 49.9 分 | 20 × 140 秒 | 23,201 MiB | 20.6 GiB | なし（仕様） |
+| `HunyuanVideo15_I2V` | 同上 | 50.5 分 | 20 × 141 秒 | 23,137 MiB | 22.1 GiB | なし（仕様） |
+
+短い設定（同じ日、起動直後に 1 本ずつ）: Kandinsky distill の 49 コマ 0.8 分、LTX の 2 秒 1.1 分（ディスクからの初回読み込みを含む）、
+HunyuanVideo の 33 コマ 6.3 分（20 × 16.4 秒）。HunyuanVideo はコマ数が 3.7 倍で 1 ステップが 8.5 倍になる（attention がトークン数の二乗で重くなる）ので、
+試すときは `length` を下げる。
+
+- **載り方。** v0.41.1 は重みを「dynamic VRAM loading」で載せる（journal に `prepared for dynamic VRAM loading. N MB Staged` と出る。
+  `loaded partially` の行は出ない）。LTX の文字エンコーダ bf16（24,998 MB）も、VRAM に入らない分を RAM に置いたまま動いた。
+  LTX の GGUF は `loaded completely; … 13618.22 MB loaded` で全部 VRAM に載る。VRAM ピークが 23〜24 GiB なのは、空いている分を使い切るためで、必要量ではない。
+- **ComfyUI-GGUF は当て物なしで LTX 2.5 の GGUF を読めた**（issue #488・#477 の症状は出なかった）。Kandinsky 6 の拡張も fp8_scaled の Qwen2.5-VL をそのまま受けた。
+  文字エンコーダの読み込みで `clip missing: ['text_projection.weight']`（Kandinsky）、VAE で `Missing VAE keys [… temb_proj …]`（HunyuanVideo）の警告が出るが、出力は正常。
+- **RAM。** 8 本を続けると、cgroup の memory.current が LTX の回から `MemoryHigh`（44 GiB）に張り付き、swap を最大 5.1 GiB 使った（anon は最大 22.1 GiB。
+  残りは重みのページキャッシュ）。止まりはしなかった。モデルを替えて続けるときは、ComfyUI を止めて起動し直すと RAM が空く。
+- **音声。** Kandinsky と LTX の mp4 には音声の流れが入り、無音ではない（RMS −20〜−38 dBFS）。HunyuanVideo 1.5 は音声を作らない。
+- **HunyuanVideo の 1080p の後段**（グループ「Video Upscale 1080P」を画面で Ctrl+B したときと同じく、枠内のノードを全部有効にした写し。33 コマ）:
+  11.3 分（720p の本体 20 × 16.5 秒、後段 4 + 4 ステップ × 26〜32 秒）で 1920×1072 の mp4 ができた。1080p の VAE デコードは
+  `Ran out of memory when regular VAE decoding, retrying with tiled VAE decoding.` と出て、ComfyUI が自動でタイル分割に切り替えて終わる。
+  細部は増えるが、建物に細かい格子状の模様が出た。グループに入っている EasyCache を切っても模様は変わらず（11.8 分）、原因ではない。
+  fp8_scaled（公式は fp16）のせいかは確かめていない。
+
 ## ライセンス
 
 ComfyUI は GPL-3.0。Mstafa-awad のノードは GPL-3.0 か MIT、WTiVo は GPL-3.0-or-later（CGAL を GPL で使う）。
 ワークフローと配布元インストーラは MIT。重みはそれぞれの配布元の条件に従う（商用に使うなら個別に確かめること）。
+動画生成: ComfyUI-GGUF は Apache-2.0、Kandinsky 6.0 の拡張と重みは MIT（音声 VAE の MMAudio `v1-44.pth` は CC BY-NC 4.0）、
+HunyuanVideo 1.5 は Tencent Hunyuan Community License（EU・英国・韓国を対象地域から除く）、LTX 2.5 は LTX-2 Community License。

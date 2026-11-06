@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>動画生成の使い方（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）— ローカル AI サーバー</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --text: #1c1f24;
+    --muted: #5a6270;
+    --border: #d8dce2;
+    --accent: #2f6f4f;
+    --accent-fg: #ffffff;
+    --warn-bg: #fdf1d6;
+    --warn-text: #7a5b00;
+    --info-bg: #e4f0ea;
+    --info-text: #1f4d36;
+    --code-bg: #eef0f3;
+    --head-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1d2025;
+      --text: #e7e9ec;
+      --muted: #9aa1ac;
+      --border: #33373f;
+      --accent: #4fae7c;
+      --accent-fg: #0d140f;
+      --warn-bg: #3a2f10;
+      --warn-text: #f0d48a;
+      --info-bg: #17301f;
+      --info-text: #bfe5cf;
+      --code-bg: #262a31;
+      --head-bg: #23272d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; }
+  header.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+  }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .head-links { display: flex; gap: 10px; flex-wrap: wrap; }
+  .head-links a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .head-links a.primary { background: var(--accent); color: var(--accent-fg); }
+  .lead { color: var(--muted); margin: 8px 0 0; }
+  nav.toc {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 18px;
+    margin: 20px 0;
+  }
+  nav.toc ol { margin: 4px 0; padding-left: 1.4em; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 22px 16px;
+    margin: 18px 0;
+  }
+  h2 { font-size: 1.2rem; margin: 18px 0 8px; }
+  h3 { font-size: 1.02rem; margin: 18px 0 6px; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 0.92rem; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--head-bg); font-weight: 600; }
+  td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+  code, kbd {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  .callout { border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 0.93rem; }
+  .callout.warn { background: var(--warn-bg); color: var(--warn-text); }
+  .callout.info { background: var(--info-bg); color: var(--info-text); }
+  .callout p { margin: 4px 0; }
+  ol.steps > li { margin: 4px 0; }
+  .muted { color: var(--muted); font-size: 0.88rem; }
+  .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page-head">
+    <h1>動画生成の使い方（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）</h1>
+    <div class="head-links">
+      <a href="/">← 入口ページ</a>
+      <a class="primary" id="comfyui-link" href="#" target="_blank" rel="noopener noreferrer">ComfyUI を開く（ポート 8188）→</a>
+    </div>
+  </header>
+  <p class="lead">
+    文章や画像 1 枚から短い動画を作る 3 つのモデルを、ComfyUI のワークフローとして入れてある。
+    この機体（NVIDIA A30・VRAM 24 GiB・RAM 64 GB）で動くように、重みの形式（量子化）を選んである。
+    Kandinsky 6.0 Lite と LTX 2.5 Fast は<strong>音声付き</strong>の動画を作る。HunyuanVideo 1.5 は音声なし。
+  </p>
+
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#what">できること（3 つのモデルの違い）</a></li>
+      <li><a href="#start">起動して開く</a></li>
+      <li><a href="#workflows">ワークフロー別の手順</a></li>
+      <li><a href="#a30">A30 向けに変えたところ（量子化）</a></li>
+      <li><a href="#measured">目安（この機体の実測）</a></li>
+      <li><a href="#trouble">困ったとき</a></li>
+      <li><a href="#cli">画面を使わずに流す</a></li>
+      <li><a href="#license">ライセンス</a></li>
+      <li><a href="#unverified">確かめていないこと</a></li>
+    </ol>
+  </nav>
+
+  <section id="what">
+    <h2>1. できること（3 つのモデルの違い）</h2>
+    <p>ComfyUI の左の <strong>Workflows</strong> → <strong>Video</strong> フォルダに 8 本ある。どれも開くと左上に緑の日本語ノート「使い方（日本語・この機体）」がある。</p>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>モデル</th><th>ワークフロー</th><th>入力</th><th>出力（既定）</th><th>音声</th><th>大きさ</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>HunyuanVideo 1.5</strong>（Tencent）</td><td><code>HunyuanVideo15_T2V</code><br><code>HunyuanVideo15_I2V</code></td>
+            <td>文章 / 文章＋最初のコマの画像</td><td>1280×720・121 コマ（24 fps で約 5 秒）</td><td>なし</td><td>8.3B</td></tr>
+        <tr><td><strong>Kandinsky 6.0 Lite</strong>（Kandinsky Lab）</td><td><code>Kandinsky6_Lite_T2V</code> / <code>_I2V</code>（50 ステップ）<br><code>Kandinsky6_LiteDistill_T2V</code> / <code>_I2V</code>（10 ステップ）</td>
+            <td>映像と音の説明文 / ＋最初のコマの画像</td><td>864×480・121 コマ（24 fps で約 5 秒）</td><td>あり（44.1 kHz）</td><td>3B</td></tr>
+        <tr><td><strong>LTX 2.5 Fast</strong>（Lightricks）</td><td><code>LTX25_Fast_T2V</code><br><code>LTX25_Fast_I2V</code></td>
+            <td>文章 / 文章＋最初のコマの画像</td><td>約 1280×720・5 秒・24 fps（低い解像度で作って 2 倍に上げる 2 段）</td><td>あり</td><td>22B（distilled）</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul>
+      <li><strong>T2V</strong> は文章 → 動画、<strong>I2V</strong> は画像（最初のコマ）＋文章 → 動画。</li>
+      <li>「LTX 2.5 Fast」は LTX 2.5 の distilled（少ないステップで作るように学習し直した）版。Lightricks の API と LTX Desktop がこの名前で呼んでいる。</li>
+      <li>Kandinsky の Lite と Lite distill は同じ 3B。distill は 10 ステップで速く、Lite は 50 ステップで丁寧に作る。迷ったら distill から試す。</li>
+      <li>プロンプトは英語で書く（HunyuanVideo は中国語も可）。日本語はどれも弱い。</li>
+    </ul>
+  </section>
+
+  <section id="start">
+    <h2>2. 起動して開く</h2>
+    <ol class="steps">
+      <li>入口ページ（このページの左上の「← 入口ページ」）の <strong>ComfyUI</strong> のカードで「起動」を押す。Hunyuan3D・Pixal3D・Strata・音楽・効果音生成が動いていれば自動で止まる。</li>
+      <li>Open WebUI で Qwen を使った直後は、入口ページの上の帯に Qwen が載っていると出る。案内に従って降ろす（VRAM を空ける）。</li>
+      <li>カードが「稼働中」になったら、上の「ComfyUI を開く」を押す。</li>
+      <li>左の <strong>Workflows</strong>（ワークフロー）→ <strong>Video</strong> → 使うものを開く。</li>
+      <li>プロンプト（と画像）を変えて <strong>Run</strong> を押す。できた mp4 は右端の <strong>Save Video</strong> に出て、サーバーの <code>tools/comfyui/vendor/ComfyUI/output/video/</code> に残る。</li>
+    </ol>
+    <div class="callout info"><p>最初の 1 本は重みをディスクから読むので、2 本目より数分長くかかる。動画は 1 本ずつ作る。</p></div>
+  </section>
+
+  <section id="workflows">
+    <h2>3. ワークフロー別の手順</h2>
+    <h3>HunyuanVideo 1.5（<code>HunyuanVideo15_T2V</code> / <code>HunyuanVideo15_I2V</code>）</h3>
+    <ul>
+      <li>プロンプト: <strong>CLIP Text Encode (Positive Prompt)</strong>。出てほしくないものは Negative に書く。</li>
+      <li>I2V の画像: グループ「Step 2 - Upload start_image」の <strong>Load Image</strong>。</li>
+      <li>長さ: T2V は <strong>EmptyHunyuanVideo15Latent</strong>、I2V は <strong>HunyuanVideo15ImageToVideo</strong> の <code>length</code>（4 の倍数＋1。49 で約 2 秒）。</li>
+      <li>1080p にする後段: グループ「Video Upscale 1080P (Ctrl-B to enable)」を選んで Ctrl+B で有効にする（既定は切ってある）。出力は 1920×1072。33 コマで約 11 分（720p の本体 5.5 分＋後段 4 分＋デコード）。細部は増えるが、建物などに細かい格子状の模様が出ることがある。デコード中に「Ran out of memory … retrying with tiled VAE decoding」と出るのは、ComfyUI が自動でタイル分割に切り替えたためで、そのまま終わる。</li>
+    </ul>
+    <h3>LTX 2.5 Fast（<code>LTX25_Fast_T2V</code> / <code>LTX25_Fast_I2V</code>）</h3>
+    <ul>
+      <li>中央の大きなノード（subgraph「Text to Video (LTX-2.5)」/「Image to Video (LTX-2.5)」）に入力がまとまっている。</li>
+      <li>プロンプト: <strong>prompt</strong>。映像と一緒に鳴らしたい音（声・効果音・環境音）も書く。</li>
+      <li>長さ: <strong>duration</strong>（秒）。幅・高さは左の <strong>Resolution Selector</strong>（縦横比とメガピクセル）が決める。</li>
+      <li>I2V の画像: <strong>Load First Frame</strong>。</li>
+      <li><strong>prompt_enhance</strong>（Gemma 4 E2B でプロンプトを膨らませる）は切ってある。入れると 1〜2 分長くなる。</li>
+    </ul>
+    <h3>Kandinsky 6.0 Lite / Lite distill（<code>Kandinsky6_*</code>）</h3>
+    <ul>
+      <li>プロンプト: ノード「Prompt（映像 video_caption と音 audio_caption）」。<code>video_caption</code> に映像、<code>audio_caption</code> に音を書く。</li>
+      <li>出てほしくないもの: その下の「Negative video and audio prompt」。</li>
+      <li>I2V の画像: <strong>Load Image</strong>（864×480 に合わせて中央で切り抜かれる）。</li>
+      <li>大きさと長さ: <strong>Kandinsky6EmptyLatent</strong> の <code>width</code>・<code>height</code>（16 の倍数）・<code>length</code>（4 の倍数＋1）。</li>
+      <li>distill は <strong>Kandinsky 6 Sampler</strong> の CFG を 1、denoise を 1 から変えると止まる（PiFlow の決まり）。</li>
+    </ul>
+  </section>
+
+  <section id="a30">
+    <h2>4. A30 向けに変えたところ（量子化）</h2>
+    <p>A30 は VRAM 24 GiB で、FP8 の演算器を持たない。FP8・GGUF の重みは ComfyUI が計算の直前に bf16 へ戻すので動く（速さは bf16 と同じか少し遅い）。
+       VRAM に入りきらない重みは、ComfyUI が入る分だけ載せて残りを RAM に置く。どの重みも Hugging Face のライセンス同意（gated）が要らないものを選んだ。</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>モデル</th><th>部品</th><th>使う重み</th><th>大きさ</th><th>公式との違い</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="3">HunyuanVideo 1.5</td><td>変換器（720p）</td><td>fp16</td><td class="num">16.6 GB</td><td>テンプレートと同じ</td></tr>
+        <tr><td>文字エンコーダ Qwen2.5-VL 7B</td><td>fp8_scaled</td><td class="num">9.4 GB</td><td>テンプレートと同じ</td></tr>
+        <tr><td>1080p 化の変換器</td><td>fp8_scaled</td><td class="num">8.3 GB</td><td>テンプレートの fp16（16.7 GB）から替えた</td></tr>
+        <tr><td rowspan="3">LTX 2.5 Fast</td><td>変換器（22B distilled）</td><td>GGUF UD-Q4_K_XL（unsloth）</td><td class="num">14.0 GB</td><td>公式の int8（21.5 GB、gated）から替えた</td></tr>
+        <tr><td>文字エンコーダ Gemma 4 12B</td><td>bf16</td><td class="num">26.3 GB</td><td>公式の int8（15.4 GB）は gated</td></tr>
+        <tr><td>動画の VAE</td><td>畳み込み版 bf16</td><td class="num">1.5 GB</td><td>公式の拡散デコーダ版は gated</td></tr>
+        <tr><td rowspan="3">Kandinsky 6.0 Lite</td><td>変換器（3B）</td><td>bf16</td><td class="num">7.5 GB（distill 6.4 GB）</td><td>上流の例の Pro distill（29B）から替えた</td></tr>
+        <tr><td>文字エンコーダ Qwen2.5-VL 7B</td><td>fp8_scaled</td><td class="num">9.4 GB</td><td>上流の bf16（16.6 GB）から替えた。HunyuanVideo と共用</td></tr>
+        <tr><td>プロンプトの書き足し・超解像</td><td>外した</td><td class="num">—</td><td>上流の例は Qwen3.5 9B（19 GB）と別の拡張 kandinsky6-sr を使う</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="measured">
+    <h2>5. 目安（この機体の実測）</h2>
+    <p id="measured-status">2026-11-06 に、各ワークフローを既定の設定のまま 1 本ずつ流して測った（ほかに GPU を使う作業が無い状態）。どれも最後まで通り、音声付きのものは mp4 に音が入った。</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>ワークフロー</th><th>出力</th><th>かかった時間</th><th>RAM（最大）</th></tr></thead>
+      <tbody>
+        <tr><td><code>Kandinsky6_LiteDistill_T2V</code> / <code>_I2V</code></td><td>864×480・5 秒・音声あり</td><td class="num">2.4 分</td><td class="num">10 GiB</td></tr>
+        <tr><td><code>Kandinsky6_Lite_T2V</code> / <code>_I2V</code></td><td>864×480・5 秒・音声あり</td><td class="num">19 分</td><td class="num">10 GiB</td></tr>
+        <tr><td><code>LTX25_Fast_T2V</code> / <code>_I2V</code></td><td>1280×704・5 秒・音声あり</td><td class="num">1.5 分</td><td class="num">17 GiB</td></tr>
+        <tr><td><code>HunyuanVideo15_T2V</code> / <code>_I2V</code></td><td>1280×720・5 秒・音声なし</td><td class="num">50 分</td><td class="num">22 GiB</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul>
+      <li><strong>まず試すなら LTX 2.5 Fast か Kandinsky の LiteDistill。</strong>どちらも 5 秒の動画が 1〜3 分でできる。</li>
+      <li>HunyuanVideo 1.5 は長さを伸ばすと急に遅くなる。33 コマ（約 1.4 秒）なら 6 分、121 コマ（約 5 秒）だと 50 分。試すときは <code>length</code> を 33〜49 にする。</li>
+      <li>VRAM はどれも 23〜24 GiB 使う（ComfyUI が空いている分を使い切る）。ほかの GPU のサービスと同時には動かせない。</li>
+      <li>ComfyUI を起動して最初の 1 本は、重みをディスクから読むので 1〜数分長くかかる。</li>
+      <li>違うモデルを何本も続けると、前の重みが RAM に残って swap を使う（8 本続けて最大 5 GiB）。止まりはしないが、モデルを替えるときは入口ページで ComfyUI を止めて起動し直すと軽くなる。</li>
+    </ul>
+  </section>
+
+  <section id="trouble">
+    <h2>6. 困ったとき</h2>
+    <ul>
+      <li><strong>赤い枠のノードに「Value not in list」</strong>: 重みが無い。サーバーで <code>tools/comfyui/run-comfyui fetch-models --video</code> を流す（合計 約 111 GiB）。1 つのモデルだけなら <code>--group hunyuanvideo15</code>・<code>ltx25</code>・<code>kandinsky6</code>。</li>
+      <li><strong>「Unet Loader (GGUF)」や「Kandinsky 6 Sampler」が赤い（ノードが無い）</strong>: custom_nodes の読み込みに失敗している。サーバーで <code>tools/comfyui/run-comfyui doctor --skip-selftest</code> を流して NG の行を見る。</li>
+      <li><strong>CUDA out of memory</strong>: Ollama の Qwen や、別の作業が GPU を使っていないかを入口ページの上の帯で見る。長さ（length / duration）か解像度を下げる。</li>
+      <li><strong>2 本目から遅い・PC が重い</strong>: 前の重みが RAM に残っている。入口ページで ComfyUI を止めて起動し直す。</li>
+      <li><strong>Kandinsky の distill で「requires CFG=1 and denoise=1」</strong>: Kandinsky 6 Sampler の cfg と denoise を 1 に戻す。</li>
+    </ul>
+  </section>
+
+  <section id="cli">
+    <h2>7. 画面を使わずに流す</h2>
+    <p>サーバーで ComfyUI が動いているとき、写しを API 形式に変えて流せる（LTX の subgraph も展開する）。結果は <code>output/localai_runs/&lt;tag&gt;/run.json</code> に残る。</p>
+<pre><code>tools/comfyui/.venv/bin/python tools/comfyui/scripts/run_workflow.py run \
+  tools/comfyui/vendor/ComfyUI/user/default/workflows/Video/Kandinsky6_LiteDistill_T2V.json \
+  --tag k6-distill --monitor --free-before</code></pre>
+  </section>
+
+  <section id="license">
+    <h2>8. ライセンス</h2>
+    <ul>
+      <li><strong>HunyuanVideo 1.5</strong>: Tencent Hunyuan Community License。対象地域から EU・英国・韓国が除かれている。月間 1 億人を超えるサービスでは別の許諾が要る。使う前に条文を読む。</li>
+      <li><strong>LTX 2.5</strong>: LTX-2 Community License。年商 1,000 万ドル以上の組織の商用利用は別契約が要る。</li>
+      <li><strong>Kandinsky 6.0</strong>: 変換器と拡張は MIT。ただし音声を作る部品（MMAudio の <code>v1-44.pth</code>）は <strong>CC BY-NC 4.0（非商用）</strong>なので、Kandinsky で作った音声付きの動画は非商用に限る。</li>
+    </ul>
+  </section>
+
+  <section id="unverified">
+    <h2>9. 確かめていないこと</h2>
+    <ul id="unverified-list">
+      <li>画面での見え方（日本語ノートの位置・subgraph の入力の並び）は、画面写しで確かめていない。</li>
+      <li>出来の良し悪しは、プロンプトと画像によるため比べていない（どれもテンプレートの例のプロンプトで、破綻のない映像になることは確かめた）。</li>
+      <li>1080p の後段で出る格子状の模様が、fp8_scaled の重み（公式は fp16）のせいかどうかは確かめていない（EasyCache を切っても変わらなかった）。</li>
+      <li>HunyuanVideo の EasyCache（本体側。速くなるが質が落ちる）でどれだけ速くなるかは測っていない。</li>
+    </ul>
+    <p class="muted">根拠と詳しい記録: <code>tools/comfyui/README.md</code>（「動画生成」）。</p>
+  </section>
+
+  <footer>
+    このページは入口ページ（ポート 8080）が配っている（<code>tools/portal/guides/video-generation.html</code>）。
+  </footer>
+</main>
+<script>
+  // ComfyUI へのリンクは、このページを開いたホスト名から作る（サーバーの IP を書かない）。
+  (function () {
+    const link = document.getElementById("comfyui-link");
+    link.href = location.protocol + "//" + location.hostname + ":8188/";
+  })();
+</script>
+</body>
+</html>

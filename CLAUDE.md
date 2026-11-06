@@ -16,7 +16,7 @@ NVIDIA A30 1 枚でローカル LLM を動かし、その上に作業を任せ�
 | `tools/status/` | いま Qwen が何を処理しているかを見る（サーバー用 sh と、他の PC 用 sh / ps1） |
 | `tools/hunyuan3d/` | 正面・背面・左・右の 4 枚の画像から 3D メッシュを作る Hunyuan3D-2mv（ポート 7860） |
 | `tools/pixal3d/` | 同じく複数画像から 3D メッシュを作る Pixal3D（TencentARC、ポート 7861）。Hunyuan3D とは排他 |
-| `tools/comfyui/` | ComfyUI と PixelArtistry の防水メッシュ用ワークフロー（ポート 8188）。WTiVo のネイティブ部分（CGAL・CUDA 12.6）を自前でビルドする |
+| `tools/comfyui/` | ComfyUI と PixelArtistry の防水メッシュ用ワークフロー（ポート 8188）。WTiVo のネイティブ部分（CGAL・CUDA 12.6）を自前でビルドする。動画生成 8 本（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast。Workflows → Video、重みは `run-comfyui fetch-models --video`）も入れる |
 | `tools/strata/` | MoE の CPU-GPU 分担推論エンジン Strata（OpenAI 互換 API）。汎用版 RVN IQ3_S（8082、unit `strata`）・Coder IQ1_M（8083、`strata-coder`）・公式 IQ3_XXS（8084、`strata-official`）・公式 IQ3_S（8085、`strata-official-iq3s`）・Swift 1.5 IQ3_XXS（8086、`strata-swift`）。モデルごとの値は `stra/config.py` の `ModelSpec` |
 | `tools/audiocraft/` | 文章から作曲・効果音を作る AudioCraft（MusicGen Medium / AudioGen Medium、ポート 7862、Gradio 画面）。重みは CC-BY-NC 4.0（非商用）。古い torch 2.1.0（cu121）の専用 venv（Python 3.11） |
 | `tools/portal/` | ポート 8080 のサービス入口ページ。Open WebUI / Strata 5 種 / Hunyuan3D / Pixal3D / ComfyUI / AudioCraft を起動・停止する |

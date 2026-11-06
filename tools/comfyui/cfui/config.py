@@ -92,6 +92,9 @@ WTIVO_SRC_URL = "https://github.com/Mstafa-awad/WTiVo-WatertightVoxel.git"
 # タグは無い。VERSION ファイルが 1.0.0 の main の HEAD（2026-09-11）。
 WTIVO_SRC_COMMIT = "7a0ac7cb24fd0588f2f7a78c787779d760d36f48"
 
+# 動画生成で足した custom_node のフォルダ名（下の CUSTOM_NODES に入る）。
+GGUF_NODE_NAME = "ComfyUI-GGUF"
+
 # custom_nodes（フォルダ名, URL, コミット）。Mstafa-awad の 9 個は配布元 bat の SHA_* と同じ。
 CUSTOM_NODES = (
     (
@@ -143,6 +146,14 @@ CUSTOM_NODES = (
         "WTiVo-FastMergeByDistance",
         "https://github.com/Mstafa-awad/WTiVo-FastMergeByDistance.git",
         "5392949165ceed1e74448b1949d6e0dc9b34dd92",
+    ),
+    # 動画生成（LTX 2.5 の GGUF を読む Unet Loader (GGUF)）。2026-01-12 の HEAD。
+    # ComfyUI v0.41.1 の Linear は input_act をキーワードで渡さない（comfy/ops.py の linear_input_act は
+    # INT8 の重み以外で linear(x) を呼ぶ）ので、issue #488 の当て物は要らない。
+    (
+        GGUF_NODE_NAME,
+        "https://github.com/city96/ComfyUI-GGUF.git",
+        "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
     ),
 )
 
@@ -283,3 +294,268 @@ SELFTEST_ARGS = {
 }
 
 VRAM_FREE_THRESHOLD_MIB = 1024
+
+
+# ---------------------------------------------------------------- 動画生成（2026-11-05 追加）
+# HunyuanVideo 1.5・LTX 2.5（Fast = distilled）は ComfyUI 本体（v0.41.1）のノードで動く。
+# Kandinsky 6.0 は本体に無いので、公式の ComfyUI 拡張（kandinskylab/kandinsky-6 の comfyui/）を
+# vendor/kandinsky-6 に固定コミットで取り、custom_nodes/kandinsky6 からシンボリックリンクで指す。
+KANDINSKY6_SRC_URL = "https://github.com/kandinskylab/kandinsky-6.git"
+KANDINSKY6_SRC_COMMIT = "7ceeefad7fb625011f7db602c43893a989f19c15"  # 2026-10-25 の HEAD（拡張 v1.0.2）
+KANDINSKY6_SRC_DIR = VENDOR_DIR / "kandinsky-6"
+KANDINSKY6_NODE_LINK = CUSTOM_NODES_DIR / "kandinsky6"
+# リンクの中身（custom_nodes/ から見た相対パス）。
+KANDINSKY6_NODE_LINK_TARGET = "../../kandinsky-6/comfyui"
+KANDINSKY6_EXAMPLE_WORKFLOWS_DIR = KANDINSKY6_SRC_DIR / "comfyui" / "example_workflows"
+
+# 動画のワークフローの写しの置き場（画面の Workflows → Video）。scripts/adapt_video_workflows.py が書く。
+VIDEO_WORKFLOWS_DIR = COMFYUI_DIR / "user" / "default" / "workflows" / "Video"
+VIDEO_OUTPUT_DIR = COMFYUI_DIR / "output" / "video"
+# 写しのファイル名（ファイル名, 土台, 種類）。土台は同梱テンプレート（comfyui-workflow-templates）の名前か、
+# Kandinsky 6 の拡張の example_workflows/ のファイル名。
+VIDEO_WORKFLOWS = (
+    ("HunyuanVideo15_T2V.json", "video_hunyuan_video_1.5_720p_t2v.json", "hunyuan_t2v"),
+    ("HunyuanVideo15_I2V.json", "video_hunyuan_video_1.5_720p_i2v.json", "hunyuan_i2v"),
+    ("LTX25_Fast_T2V.json", "video_ltx2_5_t2v.json", "ltx_t2v"),
+    ("LTX25_Fast_I2V.json", "video_ltx2_5_i2v.json", "ltx_i2v"),
+    ("Kandinsky6_Lite_T2V.json", "Kandinsky 6.0 Text to Video+Audio.json", "kandinsky_lite_t2v"),
+    ("Kandinsky6_Lite_I2V.json", "Kandinsky 6.0 Image to Video+Audio.json", "kandinsky_lite_i2v"),
+    ("Kandinsky6_LiteDistill_T2V.json", "Kandinsky 6.0 Text to Video+Audio.json", "kandinsky_distill_t2v"),
+    ("Kandinsky6_LiteDistill_I2V.json", "Kandinsky 6.0 Image to Video+Audio.json", "kandinsky_distill_i2v"),
+)
+VIDEO_WORKFLOW_FILES = tuple(entry[0] for entry in VIDEO_WORKFLOWS)
+# I2V（画像 → 動画）の写しの既定の入力画像。同梱テンプレートと同じ画像（プロンプトがこの画像に合わせてある）を
+# input/ に置く（3D の SAMPLE_IMAGE_URL と同じ置き場所）。Kandinsky 6 の拡張は起動時に自分の例を input/kandinsky6/ へ写す。
+VIDEO_SAMPLE_IMAGES = (
+    (
+        "video_hunyuan_video_1.5_720p_i2v_input_image.png",
+        "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/refs/heads/main/input/"
+        "video_hunyuan_video_1.5_720p_i2v_input_image.png",
+    ),
+    (
+        "neon_cyborg_portrait.png",
+        "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/refs/heads/main/input/neon_cyborg_portrait.png",
+    ),
+)
+KANDINSKY6_SAMPLE_IMAGE = "kandinsky6/kandinsky6_i2va_portrait.png"
+# 写しで、映像と音のプロンプトを書く Kandinsky6TextEncode に付ける題名（日本語ノート・ガイドもこの名前で指す）
+KANDINSKY6_PROMPT_TITLE = "Prompt（映像 video_caption と音 audio_caption）"
+
+# 動画の重み（グループ, 置き先, ファイル名, repo, repo 内のパス, バイト数, sha256）。どれも gated ではない。
+# バイト数と sha256 は 2026-11-05 に HF の tree API（?expand=true の size と lfs.oid）で確認した。
+# config.json（LFS ではない）は取得したファイルの sha256。
+# A30 は FP8 の演算器を持たないので、fp8_scaled・GGUF の重みは ComfyUI が計算の前に bf16 へ戻す。
+VIDEO_MODEL_GROUPS = ("hunyuanvideo15", "ltx25", "kandinsky6")
+VIDEO_MODEL_GROUP_LABELS = {
+    "hunyuanvideo15": "HunyuanVideo 1.5",
+    "ltx25": "LTX 2.5 Fast",
+    "kandinsky6": "Kandinsky 6.0 Lite",
+}
+# LTX 2.5 の変換器。unsloth の推奨 UD-Q4_K_XL（14.0 GB）。Q5_K_XL（16.0 GB）に替えるときは
+# この値と VIDEO_MODEL_FILES の行を差し替え、adapt_video_workflows.py --force で写しを作り直す。
+LTX25_GGUF_FILE = "ltx-2.5-22b-distilled-UD-Q4_K_XL.gguf"
+LTX25_TEXT_ENCODER_FILE = "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
+# 公式の拡散デコーダ版（ltx-2.5-video-vae-bf16）は gated。畳み込み版は ungated で軽い。
+LTX25_VIDEO_VAE_FILE = "ltx-2.5-video-vae-conv-bf16.safetensors"
+HUNYUAN15_SR_FILE = "hunyuanvideo1.5_1080p_sr_distilled_fp8_scaled.safetensors"
+# HunyuanVideo 1.5 と Kandinsky 6 で共用する文字エンコーダ（Qwen2.5-VL 7B の fp8_scaled）。
+QWEN25_VL_FILE = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+KANDINSKY6_LITE_FILE = "Kandinsky-6.0-Lite-5s-Diffusers/transformer/diffusion_pytorch_model.safetensors"
+KANDINSKY6_LITE_DISTILL_FILE = "Kandinsky-6.0-Lite-distill-5s-Diffusers/transformer/diffusion_pytorch_model.safetensors"
+
+VIDEO_MODEL_FILES = (
+    # ---- HunyuanVideo 1.5（Comfy-Org/HunyuanVideo_1.5_repackaged は Comfy-Org/Hunyuan-Video-1.5 へ改名されている）
+    (
+        "hunyuanvideo15",
+        "diffusion_models",
+        "hunyuanvideo1.5_720p_t2v_fp16.safetensors",
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors",
+        16653368128,
+        "4f05e2a31b51b7ddee3ef336d234e0932001cbdc85887da15451069fda3e1d05",
+    ),
+    (
+        "hunyuanvideo15",
+        "diffusion_models",
+        "hunyuanvideo1.5_720p_i2v_fp16.safetensors",
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_fp16.safetensors",
+        16653368128,
+        "96883b154e4231e6106515bdef53a091085d5821518c387eb28609fde77e4bf1",
+    ),
+    (
+        "hunyuanvideo15",
+        "diffusion_models",
+        HUNYUAN15_SR_FILE,
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/diffusion_models/" + HUNYUAN15_SR_FILE,
+        8335262258,
+        "242642db5bb227389724e4c0b20a2224534ac4087597246175421492319698eb",
+    ),
+    (
+        "hunyuanvideo15",
+        "latent_upscale_models",
+        "hunyuanvideo15_latent_upsampler_1080p.safetensors",
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/latent_upscale_models/hunyuanvideo15_latent_upsampler_1080p.safetensors",
+        201404760,
+        "a3630a7e0ab21084aa69e5a649f59fba34a7110733c9ca3d4fee781323758198",
+    ),
+    (
+        "hunyuanvideo15",
+        "text_encoders",
+        QWEN25_VL_FILE,
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/text_encoders/" + QWEN25_VL_FILE,
+        9384670680,
+        "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+    ),
+    (
+        "hunyuanvideo15",
+        "text_encoders",
+        "byt5_small_glyphxl_fp16.safetensors",
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors",
+        438643184,
+        "516910bb4c9b225370290e40585d1b0e6c8cd3583690f7eec2f7fb593990fb48",
+    ),
+    (
+        "hunyuanvideo15",
+        "vae",
+        "hunyuanvideo15_vae_fp16.safetensors",
+        "Comfy-Org/Hunyuan-Video-1.5",
+        "split_files/vae/hunyuanvideo15_vae_fp16.safetensors",
+        2521292758,
+        "e7c3091949c27e2d55ae6d5df917b99dadfebbf308e5a50d0ade0d16c90297ae",
+    ),
+    (
+        "hunyuanvideo15",
+        "clip_vision",
+        "sigclip_vision_patch14_384.safetensors",
+        "Comfy-Org/sigclip_vision_384",
+        "sigclip_vision_patch14_384.safetensors",
+        856505640,
+        "1fee501deabac72f0ed17610307d7131e3e9d1e838d0363aa3c2b97a6e03fb33",
+    ),
+    # ---- LTX 2.5 Fast（distilled 22B）。公式 Lightricks/LTX-2.5 は gated なので unsloth の ungated な写しから取る。
+    (
+        "ltx25",
+        "diffusion_models",
+        LTX25_GGUF_FILE,
+        "unsloth/LTX-2.5-GGUF",
+        "distilled/" + LTX25_GGUF_FILE,
+        14000234880,
+        "55442750eb0013d94fffaa4dadb577c5f4dc07107ec04389d41444f6e517d980",
+    ),
+    (
+        "ltx25",
+        "text_encoders",
+        LTX25_TEXT_ENCODER_FILE,
+        "unsloth/LTX-2.5-GGUF",
+        "text_encoders/" + LTX25_TEXT_ENCODER_FILE,
+        26263858182,
+        "ef7243612fdae7a75cb4d5cee9433e81380675fb6c213bd98ae74a9cd16561d1",
+    ),
+    (
+        "ltx25",
+        "vae",
+        LTX25_VIDEO_VAE_FILE,
+        "unsloth/LTX-2.5-GGUF",
+        "vae/" + LTX25_VIDEO_VAE_FILE,
+        1452269922,
+        "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d",
+    ),
+    (
+        "ltx25",
+        "vae",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "unsloth/LTX-2.5-GGUF",
+        "vae/ltx-2.5-audio-vae-bf16.safetensors",
+        364866540,
+        "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5",
+    ),
+    (
+        "ltx25",
+        "latent_upscale_models",
+        "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        "unsloth/LTX-2.5-GGUF",
+        "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        995778752,
+        "eb5a71fe4068ee87ccdb1c3aa635e547ca76bd2d30ae20ae889f2c325c0677e8",
+    ),
+    # プロンプト拡張（Enable Prompt Enhance）用の小さい Gemma 4。写しでは既定で切ってある。
+    (
+        "ltx25",
+        "text_encoders",
+        "gemma4_e2b_it_int8_convrot.safetensors",
+        "Comfy-Org/gemma-4",
+        "text_encoders/gemma4_e2b_it_int8_convrot.safetensors",
+        5199997904,
+        "efeca0fcad2f863e5ed0a75e3af952b72bc963604c1dda6d20aee87a32b17566",
+    ),
+    # ---- Kandinsky 6.0 Lite（3B。bf16 のまま A30 に載る）。文字エンコーダの Qwen2.5-VL は上の HunyuanVideo 1.5 と共用。
+    (
+        "kandinsky6",
+        "diffusion_models",
+        KANDINSKY6_LITE_FILE,
+        "kandinskylab/Kandinsky-6.0-Lite-5s-Diffusers",
+        "transformer/diffusion_pytorch_model.safetensors",
+        7476528464,
+        "1550090ca56fed8c75dda0d30f8aa7b46775e8e1ebb086b70ad532e40eb878f9",
+    ),
+    (
+        "kandinsky6",
+        "diffusion_models",
+        KANDINSKY6_LITE_DISTILL_FILE,
+        "kandinskylab/Kandinsky-6.0-Lite-distill-5s-Diffusers",
+        "transformer/diffusion_pytorch_model.safetensors",
+        6381599096,
+        "b1b52668561d9138d93bb4da13c9999e615bf569be9f8cf65732d54652447f53",
+    ),
+    (
+        "kandinsky6",
+        "text_encoders",
+        "clip_l.safetensors",
+        "Comfy-Org/Hunyuan-Video",
+        "split_files/text_encoders/clip_l.safetensors",
+        246144152,
+        "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd",
+    ),
+    (
+        "kandinsky6",
+        "vae",
+        "hunyuan_video_vae_bf16.safetensors",
+        "Comfy-Org/Hunyuan-Video",
+        "split_files/vae/hunyuan_video_vae_bf16.safetensors",
+        492984198,
+        "e8f8553275406d84ccf22e7a47601650d8f98bdb8aa9ccfdd6506b57a9701aed",
+    ),
+    # 音声 VAE（MMAudio の TOD デコーダ）は CC BY-NC 4.0（非商用）。
+    (
+        "kandinsky6",
+        "audio_vae",
+        "v1-44.pth",
+        "hkchengrex/MMAudio",
+        "ext_weights/v1-44.pth",
+        1221942998,
+        "ab6cc15dc31947675f75c950c41f4dcfd0d6d1817555ac871f809ec388e4651a",
+    ),
+    (
+        "kandinsky6",
+        "audio_vae/bigvgan_vocoder",
+        "bigvgan_generator.pt",
+        "nvidia/bigvgan_v2_44khz_128band_512x",
+        "bigvgan_generator.pt",
+        489041291,
+        "d9fe7ec6bd0b44ed9d66973d5012d8181c1570b01e5c72df51973e241dccd357",
+    ),
+    (
+        "kandinsky6",
+        "audio_vae/bigvgan_vocoder",
+        "config.json",
+        "nvidia/bigvgan_v2_44khz_128band_512x",
+        "config.json",
+        1403,
+        "65b7f487bfaf15256056a75f6667ef5f640214c981922a111927873705ea4ddb",
+    ),
+)

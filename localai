@@ -563,7 +563,8 @@ print_install_list() {
   strata       MoE の CPU-GPU 分担推論（8082〜8086）。約 100 GB を取得する
                --model rvn（既定）| coder | official | official-iq3s | swift で版を選ぶ
   pixal3d      複数画像 → 3D メッシュ（7861）。約 30 GB。CUDA 12.6
-  comfyui      ComfyUI と防水メッシュのワークフロー（8188）。約 16 GB。CUDA 12.6
+  comfyui      ComfyUI と防水メッシュ・動画生成のワークフロー（8188）。約 16 GB。CUDA 12.6
+               動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）の重みは --video で +約 111 GiB
   hunyuan3d    4 画像 → 3D メッシュ（7860）。約 23 GB。CUDA 13.2
   audiocraft   文章 → 作曲・効果音（7862。MusicGen / AudioGen Medium）。約 14 GB。torch 同梱の CUDA 12.1。重みは非商用
   qwen-worker  ローカル Qwen を Claude Code / Codex から使う MCP ワーカー

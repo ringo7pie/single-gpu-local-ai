@@ -14,8 +14,6 @@
 | 8188 | ComfyUI | `comfyui` | 起動しない |
 | 11434 | Ollama API | `ollama`（system） | 起動する |
 
-- 8080 は元々 Open WebUI が使っていた。入口ページを置くために 2026-09-22 に Open WebUI を 8081 へ移した。
-  元の設定は `~/.config/systemd/user/open-webui.service.bak` にあり、`tools/portal/setup-server.sh --revert` で戻せる。
 - 8188 は ComfyUI（`tools/comfyui`）。enable はしていない。使い方と「画像 1 枚から 3D」の入口は
   `knowledge/10-silver/areas/comfyui.md` を Read する。
 - Ollama だけは 127.0.0.1 で待受し、LAN に公開していない。入口ページ・Open WebUI・Hunyuan3D・Pixal3D は
@@ -33,21 +31,19 @@
 
 ## 入口ページからの起動・停止
 
-- 入口ページのカードにある「起動」「停止」ボタンが `systemctl --user start|stop` を呼ぶ。
-- Hunyuan3D は押してから使えるまで約 50 秒〜2 分かかる。その間は「起動中…」と表示される。
-- 操作の API は `POST /api/service/<key>/<start|stop>`。**`X-Portal-Request: 1` ヘッダが必須**で、
-  無いと 403 を返す。ヘッダの無い単純な POST は他サイトの JavaScript からでも送れるため、
-  独自ヘッダでブラウザの preflight を強制して、外部サイトからの操作を防いでいる。
-- 認証は無い。LAN 内からは誰でも操作できる。操作できるのは `open-webui`・`hunyuan3d`・`pixal3d` の
-  3 つで、入口ページ自身は対象外なので自分を止められない。
+- カードの「起動」「停止」が `systemctl --user start|stop` を呼ぶ。操作の API は `POST /api/service/<key>/<start|stop>` で、
+  **`X-Portal-Request: 1` ヘッダが必須**（無いと 403）。ヘッダの理由・認証・操作できる対象・起動にかかる時間は
+  `knowledge/10-silver/resources/portal-control.md` を Read する。
 
 ## 他の PC から使う
 
 - 他の PC のブラウザで `http://<server-ip>:8080/`（例: 192.168.1.10）を開く。入口ページのリンクは開いた PC の
   アドレスをもとに組み立てるので、どの PC から開いても正しいホストを指す。
+- 入口ページは使い方のページも配る（`GET /guides/<名前>.html` → `tools/portal/guides/`。2026-11-03 から ComfyUI の `pixelartistry.html`、2026-11-05 から動画生成の `video-generation.html`。ComfyUI のカードに 2 本のリンクが出る）。
+  `portal.py` を変えたら `systemctl --user restart portal` が要る。HTML はリクエストのたびに読むので再起動は要らない。
 - **サービスを足したら ufw でそのポートを開ける。** 開けないと、サーバー自身からは動くのに
   他の PC からは見えない。手順と切り分けは
   `knowledge/10-silver/resources/lan-access.md` を Read する。
 - GPU を使う 2 つ（Hunyuan3D・Pixal3D）は排他で、切り替えに数分かかる。詳細は
   `knowledge/10-silver/resources/gpu-exclusive-switching.md` を Read する。
-- Open WebUI のモデル一覧や改名の注意は `knowledge/10-silver/resources/open-webui.md` を Read する。
+- Open WebUI のモデル一覧や改名の注意、8080 から 8081 へ移した経緯と戻し方は `knowledge/10-silver/resources/open-webui.md` を Read する。

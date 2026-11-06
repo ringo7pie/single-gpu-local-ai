@@ -47,6 +47,21 @@ else:
 print(json.dumps(result))
 """
 
+# 動画生成のノードが import 時・実行時に読む Python の依存（ComfyUI-GGUF の gguf、Kandinsky 6 の音声処理の librosa）。
+_VIDEO_DEPS_PROBE = """
+import importlib.metadata
+import json
+
+result = {}
+for name in ("gguf", "librosa"):
+    try:
+        __import__(name)
+        result[name] = {"error": None, "version": importlib.metadata.version(name)}
+    except Exception as exc:
+        result[name] = {"error": type(exc).__name__ + ": " + str(exc)}
+print(json.dumps(result))
+"""
+
 # CUDA 拡張の確認用スクリプト。import に加えて、A30（sm_80）でカーネルを 1 回ずつ動かす
 # （ComfyUI-Trellis2 同梱の wheel は sm_86 / sm_120 しか持たず、import は通っても
 # カーネル起動で "no kernel image" になったため、import だけでは確かめにならない）。
@@ -306,6 +321,55 @@ def _run_selftest(timeout: float) -> dict[str, Any]:
     return parsed
 
 
+def _resolved_or_none(path: Path) -> str | None:
+    try:
+        return str(path.resolve(strict=True)) if path.is_symlink() or path.exists() else None
+    except OSError:
+        return None
+
+
+def _video_rows() -> list[checks.Row]:
+    """動画生成（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite）の行。"""
+
+    rows: list[checks.Row] = []
+    rows.append(
+        (
+            "kandinsky-6（Kandinsky 6.0 の ComfyUI 拡張のソース）",
+            *checks.classify_commit(_git_head(config.KANDINSKY6_SRC_DIR), config.KANDINSKY6_SRC_COMMIT),
+        )
+    )
+    expected_link = str((config.KANDINSKY6_SRC_DIR / "comfyui").resolve())
+    rows.append(
+        (
+            "custom_nodes/kandinsky6（kandinsky-6/comfyui へのリンク）",
+            *checks.classify_node_link(_resolved_or_none(config.KANDINSKY6_NODE_LINK), expected_link),
+        )
+    )
+    deps = _run_venv_python(_VIDEO_DEPS_PROBE, timeout=120)
+    for name in ("gguf", "librosa"):
+        entry = deps.get(name) if isinstance(deps.get(name), dict) else None
+        if entry is None:
+            rows.append((f"動画ノードの依存（{name}）", False, f"確認自体が失敗: {deps.get('error', '結果がありません')}"))
+        else:
+            ok = entry.get("error") is None
+            rows.append((f"動画ノードの依存（{name}）", ok, entry.get("version", "") if ok else str(entry["error"])))
+
+    sizes: dict[str, int | None] = {}
+    for _group, subdir, file_name, *_rest in config.VIDEO_MODEL_FILES:
+        target = config.MODELS_DIR / subdir / file_name
+        sizes[f"{subdir}/{file_name}"] = target.stat().st_size if target.is_file() else None
+    rows.extend(checks.video_model_rows(config.VIDEO_MODEL_FILES, sizes, config.VIDEO_MODEL_GROUP_LABELS))
+
+    existing = sorted(path.name for path in config.VIDEO_WORKFLOWS_DIR.glob("*.json")) if config.VIDEO_WORKFLOWS_DIR.is_dir() else []
+    rows.append(
+        (
+            f"動画のワークフロー {len(config.VIDEO_WORKFLOW_FILES)} 本（user/default/workflows/Video）",
+            *checks.classify_video_workflows(existing, config.VIDEO_WORKFLOW_FILES),
+        )
+    )
+    return rows
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     rows: list[checks.Row] = []
 
@@ -415,6 +479,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         )
     )
 
+    rows.extend(_video_rows())
+
     rows.append(
         (
             "ワークフロー 4 本（user/default/workflows/PixelArtistry）",
@@ -521,37 +587,75 @@ def _download(url: str, target: Path) -> None:
     part.replace(target)
 
 
+def _fetch_one(subdir: str, file_name: str, repo: str, path_in_repo: str, size: int, sha256: str, verify: bool) -> bool:
+    """重み 1 ファイルを取り、sha256 を確かめる。成功（既にある場合を含む）で True。"""
+
+    target = config.MODELS_DIR / subdir / file_name
+    label = f"{subdir}/{file_name}"
+    if target.is_file() and target.stat().st_size == size and not verify:
+        print(f"  {label}: 既にあります（{size} バイト）")
+        return True
+    if not (target.is_file() and target.stat().st_size == size):
+        url = checks.model_url(config.HF_BASE_URL, repo, path_in_repo)
+        print(f"  {label}: 取得します（{size / 1024 ** 3:.2f} GiB, {url}）", flush=True)
+        try:
+            _download(url, target)
+        except subprocess.CalledProcessError as exc:
+            print(f"  {label}: 取得に失敗しました（{exc}）", file=sys.stderr)
+            return False
+    actual_sha = _sha256_of(target)
+    if actual_sha != sha256:
+        # 上流（resolve/main）が差し替わった可能性がある。勝手に使わず、消してやり直せる状態にする。
+        print(
+            f"  {label}: sha256 が違います（{actual_sha}、期待値 {sha256}）。"
+            f"上流が更新された可能性があります。{target} を確認してください",
+            file=sys.stderr,
+        )
+        return False
+    print(f"  {label}: sha256 を確認しました", flush=True)
+    return True
+
+
+def selected_video_entries(video: bool, groups: list[str] | None) -> list[tuple[str, str, str, str, str, int, str]]:
+    """fetch-models の --video / --group から、取る動画の重みを選ぶ（--group は --video を含む）。"""
+
+    if not video and not groups:
+        return []
+    wanted = set(groups) if groups else set(config.VIDEO_MODEL_GROUPS)
+    return [entry for entry in config.VIDEO_MODEL_FILES if entry[0] in wanted]
+
+
 def cmd_fetch_models(args: argparse.Namespace) -> int:
     if shutil.which("curl") is None:
         print("curl がありません", file=sys.stderr)
         return 1
     failures = 0
-    for subdir, file_name, repo, path_in_repo, size, sha256 in config.MODEL_FILES:
-        target = config.MODELS_DIR / subdir / file_name
-        label = f"{subdir}/{file_name}"
-        if target.is_file() and target.stat().st_size == size and not args.verify:
-            print(f"  {label}: 既にあります（{size} バイト）")
-            continue
-        if not (target.is_file() and target.stat().st_size == size):
-            url = checks.model_url(config.HF_BASE_URL, repo, path_in_repo)
-            print(f"  {label}: 取得します（{size / 1024 ** 3:.2f} GiB, {url}）", flush=True)
-            try:
-                _download(url, target)
-            except subprocess.CalledProcessError as exc:
-                print(f"  {label}: 取得に失敗しました（{exc}）", file=sys.stderr)
+    if not args.skip_3d:
+        for subdir, file_name, repo, path_in_repo, size, sha256 in config.MODEL_FILES:
+            if not _fetch_one(subdir, file_name, repo, path_in_repo, size, sha256, args.verify):
                 failures += 1
-                continue
-        actual_sha = _sha256_of(target)
-        if actual_sha != sha256:
-            # 上流（resolve/main）が差し替わった可能性がある。勝手に使わず、消してやり直せる状態にする。
-            print(
-                f"  {label}: sha256 が違います（{actual_sha}、期待値 {sha256}）。"
-                f"上流が更新された可能性があります。{target} を確認してください",
-                file=sys.stderr,
-            )
+
+    video_entries = selected_video_entries(args.video, args.group)
+    if video_entries:
+        total = sum(entry[5] for entry in video_entries)
+        print(f"動画の重み {len(video_entries)} ファイル（合計 {total / 1024 ** 3:.1f} GiB）", flush=True)
+    for _group, subdir, file_name, repo, path_in_repo, size, sha256 in video_entries:
+        if not _fetch_one(subdir, file_name, repo, path_in_repo, size, sha256, args.verify):
             failures += 1
-            continue
-        print(f"  {label}: sha256 を確認しました")
+    if video_entries:
+        for image_name, image_url in config.VIDEO_SAMPLE_IMAGES:
+            image_path = config.INPUT_DIR / image_name
+            if image_path.is_file():
+                print(f"  input/{image_name}: 既にあります")
+                continue
+            print(f"  input/{image_name}: 取得します（{image_url}）", flush=True)
+            try:
+                _download(image_url, image_path)
+            except subprocess.CalledProcessError as exc:
+                print(f"  input/{image_name} の取得に失敗しました（{exc}）", file=sys.stderr)
+                failures += 1
+    if args.skip_3d:
+        return 0 if failures == 0 else 1
 
     sample = config.INPUT_DIR / config.SAMPLE_IMAGE_NAME
     if sample.is_file():
@@ -597,6 +701,20 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_parser = subparsers.add_parser("fetch-models", help="重みとサンプル画像を取得する（既にあればスキップ）")
     fetch_parser.add_argument(
         "--verify", action="store_true", help="既にあるファイルも sha256 を計算して確かめる"
+    )
+    fetch_parser.add_argument(
+        "--video",
+        action="store_true",
+        help="動画生成の重み（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite、合計 約 111 GiB）も取る",
+    )
+    fetch_parser.add_argument(
+        "--group",
+        action="append",
+        choices=config.VIDEO_MODEL_GROUPS,
+        help="動画の重みをこのグループだけにする（何度でも指定できる。--video を含む）",
+    )
+    fetch_parser.add_argument(
+        "--skip-3d", action="store_true", help="3D（PixelArtistry）の重みとサンプル画像を飛ばす"
     )
     fetch_parser.set_defaults(func=cmd_fetch_models)
 

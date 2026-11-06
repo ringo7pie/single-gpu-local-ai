@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A30 サーバーで ComfyUI と PixelArtistry の防水メッシュ用ワークフロー 4 本を 1 回の実行で導入する
-# （冪等。再実行は既存物を触らない）。配布元の Windows 用インストーラ
+# （冪等。再実行は既存物を触らない）。動画生成（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite）の
+# ノードとワークフローの写しも置く。動画の重み（約 111 GiB）は --video を付けたときだけ取る。配布元の Windows 用インストーラ
 # （vendor/PixelArtistry-Watertight-Meshes/watertightMeshes_win_installer.bat）の処理を Linux で置き換える。
 #
 # torch（cu126）と重み合計 約 16GB をダウンロードする。実行前に空きディスクとネットワークを確認すること。
@@ -28,6 +29,12 @@ COMFYUI_TAG="v0.41.1"
 COMFYUI_COMMIT="45bf90d1c91eecd782643346dcfb73cb0017667f"
 PIXELARTISTRY_URL="https://github.com/pixelartistry/PixelArtistry-Watertight-Meshes.git"
 PIXELARTISTRY_COMMIT="5b3a0e9d2c5783ed05ba45bbcc157b9509fb267b"
+# Kandinsky 6.0 の公式 ComfyUI 拡張（repo の comfyui/ を custom_nodes/kandinsky6 からリンクで指す）
+KANDINSKY6_URL="https://github.com/kandinskylab/kandinsky-6.git"
+KANDINSKY6_COMMIT="7ceeefad7fb625011f7db602c43893a989f19c15"
+KANDINSKY6_DIR="$VENDOR_DIR/kandinsky-6"
+KANDINSKY6_LINK="$NODES_DIR/kandinsky6"
+KANDINSKY6_LINK_TARGET="../../kandinsky-6/comfyui"
 
 # custom_nodes（フォルダ名 URL コミット）。Mstafa-awad の 9 個は配布元 bat の SHA_*（PIN_DATE=2026-09-26）。
 CUSTOM_NODE_PINS="
@@ -41,6 +48,7 @@ LODTailor-Bake-Forger https://github.com/Mstafa-awad/LODTailor-Bake-Forger.git f
 Trellis2-Mesh-Encoder https://github.com/Mstafa-awad/Trellis2-Mesh-Encoder.git 860313e67f0f69d402310dc325707bab8bec2fe9
 ComfyUI_LODsmith_Merge_Watertight https://github.com/Mstafa-awad/ComfyUI_LODsmith_Merge_Watertight.git 5da6dd69c02d0f3d4ae743d090cfac79aefe7f96
 WTiVo-FastMergeByDistance https://github.com/Mstafa-awad/WTiVo-FastMergeByDistance.git 5392949165ceed1e74448b1949d6e0dc9b34dd92
+ComfyUI-GGUF https://github.com/city96/ComfyUI-GGUF.git 6ea2651e7df66d7585f6ffee804b20e92fb38b8a
 "
 
 # torch / torchvision / torchaudio は cu126 の index から入れる（requirements.lock.txt には書かない）。
@@ -62,6 +70,8 @@ usage() {
 使い方: $(basename -- "$0") [オプション]
 
   --skip-models          重みの取得を省略する（あとで run-comfyui fetch-models を手で実行する）
+  --video                動画生成の重み（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite、約 111 GiB）も取る
+                         （run-comfyui fetch-models --video と同じ。--skip-models が優先）
   --build-only           venv・上流取得・torch・依存・CUDA 拡張・WTiVo・自前パッケージ（cfui）までで止める。
                          重みの取得・ワークフローの書き出し・systemd ユニットの配置・doctor は行わない
   --fallback-workflows   予備案（WTiVo を外したもの）の写しも書き出す。WTiVo が使えないときは
@@ -73,6 +83,7 @@ EOF
 }
 
 SKIP_MODELS=false
+VIDEO_MODELS=false
 BUILD_ONLY=false
 FALLBACK_WORKFLOWS=false
 while [ $# -gt 0 ]
@@ -80,6 +91,10 @@ do
   case "$1" in
     --skip-models)
       SKIP_MODELS=true
+      shift
+      ;;
+    --video)
+      VIDEO_MODELS=true
       shift
       ;;
     --build-only)
@@ -180,12 +195,29 @@ echo "  標準ノード（nodes_trellis2.py / nodes_mesh_postprocess.py）: 確�
 
 # ---------------------------------------------------------------- [4/12]
 echo
-echo "[4/12] custom_nodes（10 個、コミット固定）"
+echo "[4/12] custom_nodes（11 個、コミット固定）と Kandinsky 6.0 の拡張"
 while read -r node_name node_url node_commit
 do
   [ -n "$node_name" ] || continue
   fetch_pinned_repo "$node_url" "$node_commit" "$NODES_DIR/$node_name" "$node_name"
 done <<< "$CUSTOM_NODE_PINS"
+# Kandinsky 6.0 の拡張は repo の comfyui/ だけが ComfyUI のノード。上流の README は comfyui/ の中身を
+# custom_nodes/kandinsky6 へ写す手順だが、写すと固定コミットとの照合ができなくなるので、repo ごと vendor に置いてリンクする。
+fetch_pinned_repo "$KANDINSKY6_URL" "$KANDINSKY6_COMMIT" "$KANDINSKY6_DIR" "kandinsky-6"
+if [ -L "$KANDINSKY6_LINK" ]; then
+  if [ "$(readlink -- "$KANDINSKY6_LINK")" = "$KANDINSKY6_LINK_TARGET" ]; then
+    echo "  custom_nodes/kandinsky6: 既にあります（-> $KANDINSKY6_LINK_TARGET）"
+  else
+    echo "  custom_nodes/kandinsky6 が別の場所を指しています（$(readlink -- "$KANDINSKY6_LINK")）。確認してください" >&2
+    exit 1
+  fi
+elif [ -e "$KANDINSKY6_LINK" ]; then
+  echo "  custom_nodes/kandinsky6 がリンクではありません（ComfyUI-Manager などで入れたもの？）。確認してください: $KANDINSKY6_LINK" >&2
+  exit 1
+else
+  ln -s "$KANDINSKY6_LINK_TARGET" "$KANDINSKY6_LINK"
+  echo "  custom_nodes/kandinsky6: 作りました（-> $KANDINSKY6_LINK_TARGET）"
+fi
 
 # ---------------------------------------------------------------- [5/12]
 echo
@@ -403,13 +435,18 @@ echo "[10/12] 重みとサンプル画像"
 if $SKIP_MODELS; then
   echo "重み取得: 省略しました（--skip-models）。あとで '$RUNNER fetch-models' を実行してください"
 else
-  "$RUNNER" fetch-models
+  if $VIDEO_MODELS; then
+    "$RUNNER" fetch-models --video
+  else
+    "$RUNNER" fetch-models
+    echo "  動画生成の重みは取っていません（使うときは $RUNNER fetch-models --video）"
+  fi
   echo "重み取得: 完了しました"
 fi
 
 # ---------------------------------------------------------------- [11/12]
 echo
-echo "[11/12] PixelArtistry のワークフローと、画像 1 枚から 3D の入口 Image_to_3D（$PIXELARTISTRY_COMMIT）"
+echo "[11/12] PixelArtistry のワークフロー・画像 1 枚から 3D の入口 Image_to_3D（$PIXELARTISTRY_COMMIT）・動画生成の写し"
 fetch_pinned_repo "$PIXELARTISTRY_URL" "$PIXELARTISTRY_COMMIT" \
   "$VENDOR_DIR/PixelArtistry-Watertight-Meshes" "PixelArtistry-Watertight-Meshes"
 ADAPT_ARGS=()
@@ -418,6 +455,8 @@ if $FALLBACK_WORKFLOWS || [ "$WTIVO_RC" -ne 0 ]; then
   ADAPT_ARGS=(--fallback)
 fi
 "$VENV_DIR/bin/python" "$TOOL_DIR/scripts/adapt_workflows.py" "${ADAPT_ARGS[@]}"
+# 動画生成の写し（Workflows → Video）。土台は同梱テンプレートと Kandinsky 6.0 の拡張の example_workflows/。
+"$VENV_DIR/bin/python" "$TOOL_DIR/scripts/adapt_video_workflows.py"
 
 # ---------------------------------------------------------------- [12/12]
 echo
@@ -472,5 +511,5 @@ echo
 echo "次にやること:"
 echo "  - 手動起動: $RUNNER serve"
 echo "  - systemd 経由: systemctl --user start comfyui"
-echo "  - ブラウザ: http://$SERVER_HOST:8188 → Workflows → Image_to_3D（画像 1 枚から 3D）／PixelArtistry（防水メッシュ）"
+echo "  - ブラウザ: http://$SERVER_HOST:8188 → Workflows → Image_to_3D（画像 1 枚から 3D）／PixelArtistry（防水メッシュ）／Video（動画生成）"
 exit "$DOCTOR_RC"

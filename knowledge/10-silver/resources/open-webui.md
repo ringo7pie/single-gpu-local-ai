@@ -10,6 +10,11 @@ Open WebUI（ポート 8081）の運用上の事実。ポート配置と起動�
   JSON に、使ったモデル名を id そのままで持つ。
 - 認証は有効（`WEBUI_AUTH=true`）。既定モデルは `DEFAULT_MODELS` で指定する。
 
+## ポート 8081 への移動（2026-09-22）
+
+- 8080 は元々 Open WebUI が使っていた。入口ページを置くために 2026-09-22 に Open WebUI を 8081 へ移した。
+  元の設定は `~/.config/systemd/user/open-webui.service.bak` にあり、`tools/portal/setup-server.sh --revert` で戻せる。
+
 ## モデル名は約 28 文字で切れる
 
 - **モデル選択の一覧は約 28 文字で打ち切られ、それ以降は `...` になる。** 違いが名前の末尾に

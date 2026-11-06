@@ -7,6 +7,8 @@
 エンドポイント:
     GET  /                                    index.html を返す（このファイルと同じディレクトリから読む）
     GET  /api/status                          GPU / Ollama / 各サービスの状態を JSON で返す
+    GET  /guides/<名前>.html                  使い方のページ（guides/ の中の HTML）を返す。名前は英小文字・数字・
+                                               ハイフンだけで、guides/ の直下に無いものは 404（../ などで外を読ませない）
     POST /api/service/<key>/<action>          Open WebUI・Strata（汎用版・Coder 版・公式版）・Hunyuan3D・Pixal3D・ComfyUI・
                                                音楽・効果音生成（AudioCraft）の
                                                起動 (start) / 停止 (stop)。
@@ -36,6 +38,7 @@ import http.client
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -47,6 +50,10 @@ from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
+# 使い方のページ（GET /guides/<名前>.html）。入口ページの各カードからリンクする。
+GUIDES_DIR = BASE_DIR / "guides"
+GUIDE_PATH_PREFIX = "/guides/"
+GUIDE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*\.html")
 
 OLLAMA_STATUS_URL = "http://127.0.0.1:11434/api/ps"
 OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
@@ -651,6 +658,27 @@ def perform_service_action(service: dict[str, Any], action: str) -> dict[str, An
     }
 
 
+def resolve_guide_path(path: str, guides_dir: Path = GUIDES_DIR) -> Path | None:
+    """`/guides/<名前>.html` を guides/ の直下のファイルに直す。形が違う・無いときは None。
+
+    名前は英小文字・数字・ハイフンだけを許し（`..`・`/`・`%` を含むものは形で落ちる）、さらに
+    resolve() したパスの親が guides/ そのものであることを確かめる（シンボリックリンクで外を指していても読まない）。
+    """
+    if not path.startswith(GUIDE_PATH_PREFIX):
+        return None
+    file_name = path[len(GUIDE_PATH_PREFIX):].split("?", 1)[0]
+    if not GUIDE_NAME_PATTERN.fullmatch(file_name):
+        return None
+    try:
+        base = guides_dir.resolve()
+        candidate = (base / file_name).resolve()
+    except OSError:
+        return None
+    if candidate.parent != base or not candidate.is_file():
+        return None
+    return candidate
+
+
 def parse_service_action_path(path: str) -> tuple[str, str] | None:
     """`/api/service/<key>/<action>` を解釈する（純粋関数）。形が違えば None。"""
     if not path.startswith(SERVICE_ACTION_PATH_PREFIX):
@@ -1048,6 +1076,8 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
             self._serve_index()
         elif self.path == "/api/status":
             self._serve_status()
+        elif self.path.startswith(GUIDE_PATH_PREFIX):
+            self._serve_guide()
         elif (
             self.path.startswith(SERVICE_ACTION_PATH_PREFIX)
             or self.path.startswith(OPTION_PATH_PREFIX)
@@ -1091,6 +1121,22 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
             body = INDEX_FILE.read_bytes()
         except OSError as error:
             self.send_error(500, f"index.html を読めません: {error}")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_guide(self) -> None:
+        guide_path = resolve_guide_path(self.path)
+        if guide_path is None:
+            self.send_error(404, "Not Found")
+            return
+        try:
+            body = guide_path.read_bytes()
+        except OSError as error:
+            self.send_error(500, f"使い方のページを読めません: {error}")
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

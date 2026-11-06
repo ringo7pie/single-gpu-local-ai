@@ -67,7 +67,7 @@ flowchart LR
 | Ollama | 既定の LLM（Qwen3.8-27B Q4_K_M・コンテキスト 65,536 で VRAM 22,201 MiB、生成 23〜26 tok/s） | 常駐。無操作 5 分でモデルを降ろす |
 | Strata | MoE の専門家を CPU と GPU に分担させる推論エンジン（OpenAI 互換 API）。VRAM に収まらない大きな MoE を動かす | 汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 の 5 種（ポートが別、同時には載せない） |
 | Hunyuan3D / Pixal3D | 4 枚の画像から 3D メッシュ | 重みと VRAM を食い合うため排他 |
-| ComfyUI | 水密なメッシュ（ゲーム用アセット）への変換 | ネイティブ部分（CGAL・CUDA 12.6）を自前でビルド |
+| ComfyUI | 水密なメッシュ（ゲーム用アセット）への変換と、文章・画像からの動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast） | ネイティブ部分（CGAL・CUDA 12.6）を自前でビルド。動画の重みは A30 向けに fp8_scaled・GGUF を選ぶ |
 | AudioCraft | 文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）。Gradio 画面（7862） | 2 つのモデルを VRAM に載せるため排他。重みは非商用（CC-BY-NC 4.0）。古い torch 2.1.0 系の専用 venv（Python 3.11・CUDA 12.1 同梱） |
 
 Strata の設定は起動のたびに `tools/strata/stra/config.py` の `ModelSpec` と環境変数から作り直される。画面の Settings で

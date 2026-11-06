@@ -44,6 +44,10 @@
   「状態を取得できません」と表示する（古い状態を正しいと誤解しないため）。
 - リンクはページを開いたホスト名（`location.hostname`）から組み立てる。サーバー上でも、
   別の PC のブラウザからでも同じページがそのまま使える。
+- ComfyUI のカードには、状態に関係なく「使い方（Pixal3D / TRELLIS.2 の切り替え・各ワークフロー）→」と
+  「使い方（動画生成: HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）→」の 2 つのリンクがある。
+  開くのは入口ページ自身が配る `/guides/pixelartistry.html` と `/guides/video-generation.html`（下の「使い方のページ」）なので、
+  ComfyUI が止まっていても読める。
 
 ## 起動・停止（Open WebUI / Strata / Strata Flash-Next Coder / Strata 公式版 / Hunyuan3D / Pixal3D / ComfyUI）
 
@@ -429,12 +433,32 @@ VRAM・RAM・swap・Qwen/Ollama・各サービス名（Strata・Strata Flash-Nex
 `pixal3d.md` の実測値・決定事項）。カードは 5 秒ごとに作り直されるため、専門用語のクリック処理は
 個々の要素にではなく `document` へのイベント委譲で行っている。
 
+## 使い方のページ（`guides/`）
+
+`GET /guides/<名前>.html` は `guides/` の直下の HTML を返す（`portal.py` の `resolve_guide_path`）。
+
+- 名前は英小文字・数字・ハイフンだけ（`[a-z0-9][a-z0-9-]*.html`）。`..`・`/`・`%` を含むもの、`guides/` の直下に無いもの、
+  シンボリックリンクで外を指すものは 404。`?` 以降は無視する。
+- いまあるのは `pixelartistry.html`（ComfyUI の PixelArtistry 4 本と Image_to_3D の使い方。Pixal3D と TRELLIS.2 の違い・切り替え方・
+  この機体の実測）。数字の根拠は `tools/comfyui/README.md`。2K の `proxy_points` とスイッチのノード名が写しの設定と合っていることは
+  `tools/comfyui/tests/test_units.py` が確かめる。
+- `video-generation.html`（2026-11-05）は ComfyUI の動画生成 8 本（`Workflows → Video`）の使い方。3 つのモデルの違い・
+  A30 向けの量子化・実測・ライセンス。写しの名前・LTX の GGUF の名前・`fetch-models --video` のグループ名が設定と合っていることは
+  同じ試験が確かめる。
+- ページは 1 ファイルで完結させる（外部の CSS・JS・画像を読まない）。サーバーの IP を書かず、ほかのサービスへのリンクは
+  `location.hostname` から作る（どちらも試験で確かめる）。
+- ページを足すときは `guides/` に置き、`index.html` の `SERVICE_META.<key>.guides`（`href`・`label`・`tooltip` の配列。上から順に並ぶ）でカードからリンクする。
+  `portal.py` を変えたときだけ入口ページの再起動（`systemctl --user restart portal`）が要る。HTML はリクエストのたびに読むので、
+  ページの書き換えは再起動なしで反映される。
+
 ## ファイル構成
 
 | ファイル | 役割 |
 |---|---|
 | `portal.py` | `http.server` ベースの本体（標準ライブラリのみ） |
 | `index.html` | 入口ページ本体（外部 CDN 不使用、1 ファイル完結） |
+| `guides/pixelartistry.html` | ComfyUI（PixelArtistry）の使い方のページ（`GET /guides/pixelartistry.html`） |
+| `guides/video-generation.html` | ComfyUI（動画生成: HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）の使い方のページ |
 | `setup-server.sh` | 導入・移行・点検・`--revert` を行う冪等なスクリプト |
 | `systemd/portal.service.example` | `portal.service` の雛形 |
 | `tests/test_units.py` | pytest。ネットワーク・GPU・systemd を使わない単体テスト |

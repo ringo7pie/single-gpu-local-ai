@@ -24,6 +24,7 @@
 | Hunyuan3D | 要 | 低 VRAM モードあり | 大 | 約 23 GB（形状のみなら約 5 GB） | 13.2 |
 | AudioCraft（MusicGen・AudioGen の Medium 2 つ） | 要 | 2 つの 1.5B モデルを常駐。待機時 約 9.8 GiB、生成中 約 10〜11 GiB（2026-10-27 の実測。上流の文書は Medium に 16 GB 以上の GPU を推奨） | 小（cgroup の memory.peak 6.06 GiB） | 約 14 GB（重みと T5 約 8.2 GB + venv 約 5.5 GB） | wheel に同梱（12.1。システムの CUDA Toolkit は使わない） |
 | ComfyUI + 防水メッシュ | 要 | 最大 約 13 GiB（2K の 01b。01・02 は約 11 GiB） | cgroup の memory.peak で 01・02・03 は 23〜27 GiB、2K の 01b（proxy_points 20M）は約 35 GiB（2026-11-03。配布元の 25M では Blender の段で 41 GiB を超え、この機体では通らない） | 重み 約 16 GB + torch | 12.6（WTiVo のビルド） |
+| ComfyUI + 動画生成（HunyuanVideo 1.5・Kandinsky 6.0 Lite・LTX 2.5 Fast） | 要 | 24 GiB をほぼ使い切る（dynamic VRAM loading。LTX の文字エンコーダ bf16 25 GB は入らない分を RAM に置いて動く） | cgroup の anon で 9〜22 GiB（Hunyuan が最大）。続けて流すと MemoryHigh 44 GiB に当たり swap を最大 5 GiB 使う（2026-11-06） | +約 111 GiB（`fetch-models --video`。GGUF Q4_K_XL・fp8_scaled を含む） | 12.6（同じ venv） |
 | qwen-worker・local-ai-bridge | 不要（Ollama を呼ぶ） | — | 小 | 小 | — |
 
 - **GPU を使うサービスは同時に載せられない**（24 GiB しかない）。[architecture.md](architecture.md) の排他を参照。

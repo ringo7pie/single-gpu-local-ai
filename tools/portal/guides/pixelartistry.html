@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelArtistry の使い方（Pixal3D / TRELLIS.2）— ローカル AI サーバー</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --text: #1c1f24;
+    --muted: #5a6270;
+    --border: #d8dce2;
+    --accent: #2f6f4f;
+    --accent-fg: #ffffff;
+    --warn-bg: #fdf1d6;
+    --warn-text: #7a5b00;
+    --info-bg: #e4f0ea;
+    --info-text: #1f4d36;
+    --code-bg: #eef0f3;
+    --head-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1d2025;
+      --text: #e7e9ec;
+      --muted: #9aa1ac;
+      --border: #33373f;
+      --accent: #4fae7c;
+      --accent-fg: #0d140f;
+      --warn-bg: #3a2f10;
+      --warn-text: #f0d48a;
+      --info-bg: #17301f;
+      --info-text: #bfe5cf;
+      --code-bg: #262a31;
+      --head-bg: #23272d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; }
+  header.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+  }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .head-links { display: flex; gap: 10px; flex-wrap: wrap; }
+  .head-links a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .head-links a.primary { background: var(--accent); color: var(--accent-fg); }
+  .lead { color: var(--muted); margin: 8px 0 0; }
+  nav.toc {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 18px;
+    margin: 20px 0;
+  }
+  nav.toc ol { margin: 4px 0; padding-left: 1.4em; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 22px 16px;
+    margin: 18px 0;
+  }
+  h2 { font-size: 1.2rem; margin: 18px 0 8px; }
+  h3 { font-size: 1.02rem; margin: 18px 0 6px; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 0.92rem; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--head-bg); font-weight: 600; }
+  td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+  code, kbd {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  .callout { border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 0.93rem; }
+  .callout.warn { background: var(--warn-bg); color: var(--warn-text); }
+  .callout.info { background: var(--info-bg); color: var(--info-text); }
+  .callout p { margin: 4px 0; }
+  ol.steps > li { margin: 4px 0; }
+  .muted { color: var(--muted); font-size: 0.88rem; }
+  .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page-head">
+    <h1>PixelArtistry の使い方（Pixal3D / TRELLIS.2）</h1>
+    <div class="head-links">
+      <a href="/">← 入口ページ</a>
+      <a class="primary" id="comfyui-link" href="#" target="_blank" rel="noopener noreferrer">ComfyUI を開く（ポート 8188）→</a>
+    </div>
+  </header>
+  <p class="lead">
+    画像 1 枚から、閉じた（防水の、watertight）3D メッシュや、テクスチャを焼き込んだゲーム用の低ポリを作る ComfyUI のワークフロー
+    （<a href="https://github.com/pixelartistry/PixelArtistry-Watertight-Meshes" target="_blank" rel="noopener noreferrer">PixelArtistry-Watertight-Meshes</a> v1.1）の、
+    この機体（NVIDIA A30・RAM 64 GB）での使い方。形を作るモデルは Pixal3D と TRELLIS.2 の 2 つから選べる。
+  </p>
+
+  <nav class="toc" aria-label="目次">
+    <ol>
+      <li><a href="#what">できること（ワークフローの一覧）</a></li>
+      <li><a href="#models">Pixal3D と TRELLIS.2 の違い</a></li>
+      <li><a href="#start">起動して開く</a></li>
+      <li><a href="#switch">モデルの切り替え方</a></li>
+      <li><a href="#workflows">ワークフロー別の手順</a></li>
+      <li><a href="#measured">目安（この機体の実測）</a></li>
+      <li><a href="#trouble">困ったとき</a></li>
+      <li><a href="#cli">画面を使わずに流す</a></li>
+      <li><a href="#unverified">確かめていないこと</a></li>
+    </ol>
+  </nav>
+
+  <section id="what">
+    <h2>1. できること（ワークフローの一覧）</h2>
+    <p>ComfyUI の左の <strong>Workflows</strong> から開く。PixelArtistry の 4 本は <code>PixelArtistry</code> フォルダ、Image_to_3D は一番上にある。</p>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ワークフロー</th><th>入力</th><th>できるもの</th><th>形を作るモデルの既定</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>01</strong> Image to Watertight Mesh</td><td>画像 1 枚</td><td>閉じた 3D メッシュ（1536 の細かさ。3D プリントの元にも使える）</td><td>Pixal3D</td></tr>
+        <tr><td><strong>01b</strong> Image to Watertight Mesh 2K</td><td>画像 1 枚</td><td>01 と同じものを 2048 の細かさで。時間と RAM が多くかかる</td><td>Pixal3D</td></tr>
+        <tr><td><strong>02</strong> Image to GameReady Asset</td><td>画像 1 枚</td><td>テクスチャ付きの高ポリと、それを焼き込んだゲーム用の低ポリ</td><td>Pixal3D</td></tr>
+        <tr><td><strong>03</strong> Your Mesh to GameReady Asset</td><td>手持ちのメッシュ（<code>.glb</code> / <code>.obj</code>）と、その元の画像</td><td>手持ちのメッシュにテクスチャを付け、ゲーム用の低ポリも作る</td><td>TRELLIS.2（変えない）</td></tr>
+        <tr><td><strong>Image_to_3D</strong></td><td>画像 1 枚</td><td>テクスチャ付きの 3D モデル（閉じているとは限らない）。ポリゴン数とテクスチャサイズを入力欄で決める</td><td>Pixal3D</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>4 本の PixelArtistry には、開くと画像の置き場（Load Image）の真上に緑の日本語ノート「使い方（日本語・この機体）」がある。英語のノート（Start here・Settings）は配布元のまま。</p>
+  </section>
+
+  <section id="models">
+    <h2>2. Pixal3D と TRELLIS.2 の違い</h2>
+    <h3>関係</h3>
+    <ul>
+      <li><strong>TRELLIS.2</strong> は Microsoft の画像 → 3D のモデル（TRELLIS.2-4B）。<strong>Pixal3D</strong> は Tencent ARC が TRELLIS.2 の仕組みの上に作ったモデル。</li>
+      <li>ComfyUI は 2 つを同じ型（<code>Trellis2</code>）として読み込む。形とテクスチャの VAE、画像の特徴を取る DINOv3、「構造 → 形 → テクスチャ」の 3 段の流れは共通。</li>
+      <li><strong>違うところ</strong>: Pixal3D は、画像から推定したカメラ（MoGe で画角を推定する）を使い、画像の特徴を 3D の格子へ投影する（ComfyUI の
+        <code>Pixal3DConditioning</code>、注意層に投影の重みが足されている）。入力画像の見た目に形を合わせる狙いの作り。</li>
+      <li>この機体には 2 つとも入っている（重みは Pixal3D 5.2 GiB・TRELLIS.2 4.9 GiB）。どちらも ComfyUI の中で使う。入口ページに TRELLIS.2 だけのカードは無い。</li>
+    </ul>
+    <div class="callout info">
+      <p>入口ページの「Pixal3D」カード（ポート 7861）は、Pixal3D を単独で動かす別の画面（画像 1〜4 枚）。このページの ComfyUI の中の Pixal3D とは別物で、同時には使えない。</p>
+    </div>
+    <h3>どちらを使うか</h3>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>ワークフロー</th><th>Pixal3D</th><th>TRELLIS.2</th><th>メモ</th></tr></thead>
+      <tbody>
+        <tr><td>01・01b・02・Image_to_3D</td><td><span class="tag">既定</span></td><td>選べる</td><td>画像から形を作る。どちらでも最後まで動く（下の「目安」に実測）。ただし斧のサンプルの 02 は、TRELLIS.2 だと低ポリが閉じなかった。形の出来は画像によるので、両方試して選ぶ</td></tr>
+        <tr><td>03</td><td>使えない</td><td><span class="tag">必須</span></td><td>Pixal3D は推定したカメラから画像を投影するので、自分で作った形にしか色を付けられず、手持ちのメッシュでは黒いテクスチャになる（配布元のノートの説明）。手持ちのメッシュを読む形状エンコーダも TRELLIS.2 のもの</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="start">
+    <h2>3. 起動して開く</h2>
+    <ol class="steps">
+      <li><a href="/">入口ページ</a>の <strong>ComfyUI</strong> のカードで「起動」を押す。Hunyuan3D・Pixal3D（7861）・Strata・音楽・効果音生成が動いていれば、自動で止まる（GPU を 1 枚で取り合うため）。</li>
+      <li>Ollama（Qwen のチャット）にモデルが載っていれば、入口ページの案内に従って降ろす。</li>
+      <li>カードが「稼働中」になったら「開く」か、このページ上の「ComfyUI を開く」で ComfyUI の画面を開く。</li>
+      <li>左の <strong>Workflows</strong> から使うワークフローを開く。</li>
+      <li>使い終わったら、入口ページで ComfyUI を「停止」する（GPU を返す）。</li>
+    </ol>
+    <p class="muted">Blender のパス（紫の「Blender path」）は設定済み（<code>/snap/blender/current/blender</code>）。変えない。</p>
+  </section>
+
+  <section id="switch">
+    <h2>4. モデルの切り替え方</h2>
+    <p>ワークフローの中のグループ <strong>「Switch Model Here」</strong> に、ノード <strong>「Boolean (Switch to Trellis2)」</strong> がある。この 1 つで、形とテクスチャを作るモデルが決まる。</p>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>ノードの値（<code>value</code>）</th><th>使うモデル</th><th>既定になっているワークフロー</th></tr></thead>
+      <tbody>
+        <tr><td><code>false</code></td><td>Pixal3D</td><td>01・01b・02・Image_to_3D</td></tr>
+        <tr><td><code>true</code></td><td>TRELLIS.2</td><td>03</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ol class="steps">
+      <li>01・01b・02 は、開いたときの表示から右へたどると「Switch Model Here」のグループがある（画像の置き場より右）。</li>
+      <li>ノードの値を切り替えてから <strong>Run</strong> を押す。切り替えたまま保存（Ctrl+S）すると、そのワークフローはその値で保存される。</li>
+      <li><strong>Image_to_3D</strong> はアプリ表示（入力欄だけの画面）で開く。アプリ表示の入力は「画像・ポリゴン数・テクスチャサイズ」だけで、このスイッチは出ていない。
+        TRELLIS.2 を使うときはグラフ表示（ノードが並ぶ画面）に切り替えて、同じ名前のノードを <code>true</code> にする。</li>
+    </ol>
+    <div class="callout warn">
+      <p>03 を <code>false</code>（Pixal3D）にすると、テクスチャが黒くなる。03 は <code>true</code> のまま使う。</p>
+    </div>
+  </section>
+
+  <section id="workflows">
+    <h2>5. ワークフロー別の手順</h2>
+    <p>結果の GLB は、サーバーの <code>tools/comfyui/vendor/ComfyUI/output/3d/</code> に残る（ファイル名の後ろに通し番号が付く）。画面では右端のビューアに出る。</p>
+
+    <h3>01 / 01b — 画像から閉じたメッシュ</h3>
+    <ol class="steps">
+      <li><strong>Load Image</strong>（「Upload Input Image Here」）で画像を選ぶ。1 つの物体が大きく写った画像が向く。背景は自動で取り除く。</li>
+      <li>必要なら「Boolean (Switch to Trellis2)」でモデルを選ぶ。</li>
+      <li><strong>Run</strong> を押す。</li>
+      <li>結果は「Watertight model」（01）・「Watertight 2K model」（01b）のビューア。ファイルは <code>PixelArtistry_watertight_*.glb</code>・<code>PixelArtistry_watertight_2K_*.glb</code>。</li>
+    </ol>
+    <p>流れ: 形を作る → Quad Reconstruct で整える（01b では bypass）→ WTiVo で閉じる → LODTailor（Blender）で 600 万面以下に減らし閉じたまま保つ → Fast Merge で重なった頂点をまとめる。</p>
+    <div class="callout info">
+      <p>01b（2K）は、WTiVo の <code>proxy_points</code> を配布元の 25,000,000 から <strong>20,000,000</strong> に下げてある。配布元の値では WTiVo の出力が 8,255 万面に跳び、この機体の RAM に収まらなかった（2026-11-03）。</p>
+    </div>
+
+    <h3>02 — 画像からゲーム用の低ポリまで</h3>
+    <ol class="steps">
+      <li>Load Image で画像を選び、必要ならモデルを選ぶ。</li>
+      <li>「A · LODTailor low-poly」の <code>target_tris</code> で低ポリの面数を決める（既定 30,000。キャラクターは 2〜3 万、小物は 500〜1,000）。</li>
+      <li><strong>Run</strong> を押す。</li>
+      <li>結果は <code>PixelArtistry_highpoly_*.glb</code>（テクスチャ付きの高ポリ）と <code>PixelArtistry_lowpoly_*.glb</code>（焼き込んだ低ポリ）。</li>
+    </ol>
+    <p class="muted">Bake Forger の各マップは 4096px（<code>*_resolution</code> で 2048・8192 にできる）。低ポリに白い斑点が出たら <code>tight_cage_extrusion_factor</code> を上げる（キャラクター 0.0019、硬い物 0.019）。</p>
+
+    <h3>03 — 手持ちのメッシュに色を付ける</h3>
+    <ol class="steps">
+      <li>メッシュ（<code>.glb</code> か <code>.obj</code>）をサーバーの <code>tools/comfyui/vendor/ComfyUI/input/</code> に置く（scp などで送る）。</li>
+      <li>「Your mesh」ノードの <code>mesh_filename</code> にファイル名（または絶対パス）を書く。</li>
+      <li>Load Image に、そのメッシュの元になった画像を選ぶ（テクスチャはこの画像から作る）。</li>
+      <li>「Boolean (Switch to Trellis2)」は <code>true</code>（TRELLIS.2）のまま。<strong>Run</strong> を押す。</li>
+      <li>結果は <code>PixelArtistry_textured_*.glb</code>（テクスチャを付けたメッシュ）と <code>PixelArtistry_lowpoly_*.glb</code>。</li>
+    </ol>
+    <p class="muted">600 万面を超えるメッシュは先に 600 万面へ減らす（UV 展開を速くするため）。低ポリが要らなければ「2 Low-Poly + Bake」のグループを bypass（Ctrl+B）する。</p>
+
+    <h3>Image_to_3D — テクスチャ付きの 3D を手早く</h3>
+    <ol class="steps">
+      <li>Load Image で画像を選ぶ（ドラッグ＆ドロップでもよい）。</li>
+      <li>必要なら <strong>ポリゴン数</strong>（既定 700,000。0 は間引かない）と <strong>テクスチャサイズ</strong>（既定 4096。256〜8192 の 256 の倍数）を変える。</li>
+      <li><strong>Run</strong> を押す。結果は Save 3D のビューア。ファイルは <code>ComfyUI_*.glb</code>。</li>
+    </ol>
+    <p class="muted">TRELLIS.2 で作るときだけ、グラフ表示に切り替えてスイッチを <code>true</code> にする（上の「モデルの切り替え方」）。</p>
+  </section>
+
+  <section id="measured">
+    <h2>6. 目安（この機体の実測）</h2>
+    <p>入力は配布元のサンプル画像（斧、<code>viking_wolf_rune_axe.png</code>）、seed は保存値、毎回モデルを降ろしてから流した。RAM は ComfyUI 全体のピーク（cgroup の <code>memory.peak</code>。Blender とファイルのキャッシュを含む）。</p>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th rowspan="2">ワークフロー</th><th colspan="3">Pixal3D</th><th colspan="3">TRELLIS.2</th></tr>
+        <tr><th>時間</th><th>RAM</th><th>VRAM</th><th>時間</th><th>RAM</th><th>VRAM</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>01</td><td class="num">240 秒</td><td class="num">23.2 GiB</td><td class="num">10.6 GiB</td><td class="num">298 秒</td><td class="num">22.8 GiB</td><td class="num">11.4 GiB</td></tr>
+        <tr><td>01b（2K）</td><td class="num">361 秒</td><td class="num">34.3 GiB</td><td class="num">12.9 GiB</td><td class="num">432 秒</td><td class="num">31.4 GiB</td><td class="num">13.1 GiB</td></tr>
+        <tr><td>02</td><td class="num">374 秒</td><td class="num">26.9 GiB</td><td class="num">10.4 GiB</td><td class="num">520 秒 ※</td><td class="num">22.9 GiB</td><td class="num">11.4 GiB</td></tr>
+        <tr><td>03（01 の出力を入力に）</td><td colspan="3">（使えない）</td><td class="num">174 秒</td><td class="num">23.0 GiB</td><td class="num">7.4 GiB</td></tr>
+        <tr><td>Image_to_3D（既定の 70 万面・4096px）</td><td class="num">167〜173 秒</td><td class="num">17.5 GiB</td><td class="num">12.3 GiB</td><td class="num">222 秒</td><td class="num">12.7 GiB</td><td class="num">11.0 GiB</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="muted">Pixal3D の Image_to_3D は 2026-10-25、ほかは 2026-11-03 の実測。※ 02 の TRELLIS.2 は最後まで動いたが、低ポリが閉じなかった（下）。</p>
+    <h3>斧のサンプルで見えた違い</h3>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>ワークフロー</th><th>Pixal3D</th><th>TRELLIS.2</th></tr></thead>
+      <tbody>
+        <tr><td>01 の最終 GLB</td><td>3,266,464 面・閉じている・殻 3</td><td>3,451,980 面・閉じている・殻 16</td></tr>
+        <tr><td>01b の最終 GLB</td><td>3,314,412 面・閉じている・殻 15</td><td>3,218,060 面・閉じている・殻 49</td></tr>
+        <tr><td>01b の WTiVo の出力（<code>proxy_points</code> 20M）</td><td>3,959 万面</td><td>4,756 万面</td></tr>
+        <tr><td>02 の低ポリ（30,000 面）</td><td>閉じている・殻 1</td><td><strong>閉じなかった</strong>（境界辺 36・殻 13）</td></tr>
+        <tr><td>02 の高ポリ</td><td>閉じている・殻 1</td><td>境界辺 0・非多様体辺 80・殻 10</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul>
+      <li>「閉じている」は、同じ位置の頂点を溶接したあとで境界辺 0・非多様体辺 0 のこと（<code>measure_mesh.py</code> で測った）。殻はつながった塊の数。</li>
+      <li>02 の TRELLIS.2 は、低ポリ化（LODTailor、30,000 面）のあとで網が開き、最後の Fast Merge が距離を変えて 100 回試しても閉じられず、元の網のまま返した
+        （Pixal3D は同じ段で開いても、Fast Merge の 7 回目で閉じた）。</li>
+      <li>TRELLIS.2 は、形を作る最後の段（KSampler）が 80 秒（Pixal3D は 47 秒）、Quad Reconstruct が 42 秒（同 15 秒）かかり、01 は約 1 分、
+        02 は約 2.5 分長かった（02 は閉じられなかった Fast Merge の 100 回の試行に 62 秒）。Pixal3D は代わりにカメラの推定（MoGe と
+        <code>Pixal3DConditioning</code>、約 17 秒）を行う。Image_to_3D は TRELLIS.2 が 222 秒、Pixal3D が 167〜173 秒。</li>
+      <li>01b は TRELLIS.2 でも、<code>proxy_points</code> 20M のまま RAM 31.4 GiB で通った。</li>
+    </ul>
+    <div class="callout warn">
+      <p>02 で閉じた低ポリが要るときは Pixal3D（既定）を使う。TRELLIS.2 で開いたときに Run をやり直して閉じるか（構造の seed は毎回変わる）は、確かめていない。</p>
+    </div>
+  </section>
+
+  <section id="trouble">
+    <h2>7. 困ったとき</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>症状</th><th>対処</th></tr></thead>
+      <tbody>
+        <tr><td>穴が残った</td><td>もう一度 Run を押す（構造の seed は毎回変わる）。モデルを切り替えて試すのもよい。</td></tr>
+        <tr><td>ComfyUI が止まる・極端に遅くなる（RAM が足りない）</td><td>01b なら WTiVo の <code>proxy_points</code> をさらに下げる（16,000,000 や 12,000,000）か、01（1536）を使う。ほかの重いアプリを閉じる。</td></tr>
+        <tr><td>02 の低ポリが閉じない（TRELLIS.2 のとき）</td><td>Pixal3D（<code>false</code>）に戻して流す。斧のサンプルでは Pixal3D で閉じ、TRELLIS.2 では閉じなかった。</td></tr>
+        <tr><td>03 のテクスチャが黒い</td><td>「Boolean (Switch to Trellis2)」が <code>false</code>（Pixal3D）になっている。<code>true</code> に戻す。</td></tr>
+        <tr><td>Blender で開くと穴だらけに見える</td><td>GLB を読み込むとき「Merge Vertices」を付ける（UV の継ぎ目で頂点が分かれていて、開いた辺に見える）。閉じているかは 3D Print Toolbox の Check All で見る。</td></tr>
+        <tr><td>02・03 の Bake Forger だけ数分長い</td><td>機体を起動して最初の 1 回は、Blender の OptiX の準備で 3〜4 分長くかかることがある（2026-10-03 に 270 秒、2 回目は 74 秒）。</td></tr>
+        <tr><td>「起動」を押しても ComfyUI が開かない</td><td>別のプロジェクトが GPU を使っていないか、入口ページの GPU の表示を見る。数十秒〜数分待ってから開き直す。</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="cli">
+    <h2>8. 画面を使わずに流す</h2>
+    <p>サーバーの上で、リポジトリのルートから。<code>--backend</code> で「Boolean (Switch to Trellis2)」を切り替えて投入する（<code>pixal3d</code> = false、<code>trellis2</code> = true）。記録は <code>output/localai_runs/&lt;tag&gt;/</code>。</p>
+<pre><code>tools/comfyui/.venv/bin/python tools/comfyui/scripts/run_workflow.py run \
+  tools/comfyui/vendor/ComfyUI/user/default/workflows/PixelArtistry/PixelArtistry_01_Image_to_Watertight_Mesh.json \
+  --image viking_wolf_rune_axe.png --backend trellis2 --tag my_t2_wf01 --free-before --monitor --guard-mem-gib 43</code></pre>
+    <p class="muted">画像は <code>tools/comfyui/vendor/ComfyUI/input/</code> に置いた名前で指定する。<code>--guard-mem-gib 43</code> は RAM が 43 GiB を超えたら止める歯止め。詳しくは <code>tools/comfyui/README.md</code> の「画面を使わずにワークフローを通す」。</p>
+  </section>
+
+  <section id="unverified">
+    <h2>9. 確かめていないこと</h2>
+    <ul>
+      <li>実測は斧のサンプル 1 枚だけ。ほかの画像で時間・RAM・面数が同じになるとは限らない。</li>
+      <li>Pixal3D と TRELLIS.2 のどちらの出来が良いかは、画像によるため決めていない。</li>
+      <li>ComfyUI の画面での見え方（日本語ノートの位置、Image_to_3D の表示の切り替えの場所）は、画面写しで確かめていない。</li>
+    </ul>
+    <p class="muted">根拠と詳しい記録: <code>tools/comfyui/README.md</code>（「2K（01b）をこの機体で通す設定」「実機試験の結果」）。</p>
+  </section>
+
+  <footer>
+    このページは入口ページ（ポート 8080）が配っている（<code>tools/portal/guides/pixelartistry.html</code>）。
+  </footer>
+</main>
+<script>
+  // ComfyUI へのリンクは、このページを開いたホスト名から作る（サーバーの IP を書かない）。
+  (function () {
+    const link = document.getElementById("comfyui-link");
+    link.href = location.protocol + "//" + location.hostname + ":8188/";
+  })();
+</script>
+</body>
+</html>
