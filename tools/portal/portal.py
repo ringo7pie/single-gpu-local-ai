@@ -184,6 +184,17 @@ SERVICES = [
         "unit": "audiocraft",
         "memory_default": {"high_gib": 16, "max_gib": 20},
     },
+    # 声の特徴を文章で指定する読み上げ（Qwen3-TTS VoiceDesign 1.7B）。上流の Gradio 画面 qwen-tts-demo をそのまま使う（tools/qwen3-tts）。
+    # 2026-11-21 に足した。低 VRAM のスイッチは持たない。GPU の排他グループに入り、起動前に Ollama のモデルを降ろす
+    # （Qwen 27B の 22 GiB と同居できない）。メモリ上限の既定値 6 / 8 GiB は実測（2026-11-21、cgroup の memory.peak 1.61 GiB）の約 4〜5 倍。
+    # 根拠は tools/qwen3-tts/README.md。
+    {
+        "key": "qwen3-tts",
+        "name": "音声合成（Qwen3-TTS VoiceDesign）",
+        "port": 7863,
+        "unit": "qwen3-tts",
+        "memory_default": {"high_gib": 6, "max_gib": 8},
+    },
 ]
 SERVICES_BY_KEY = {service["key"]: service for service in SERVICES}
 
@@ -194,17 +205,18 @@ SERVICES_BY_KEY = {service["key"]: service for service in SERVICES}
 # RAM は memory.peak 50 GiB、VRAM は生成中 23,899 MiB）使うので、
 # これらとは同時に動かせない（Strata の 5 つどうしも同時には動かせない。9 つのうち同時に動くのは 1 つだけ）。
 # AudioCraft（音楽・効果音生成）は 2 つの 1.5B モデルを VRAM に載せる（2026-10-27 の実測で待機時 約 9.8 GiB、生成中 約 10〜11 GiB）ので、同じ扱いにする。
+# Qwen3-TTS（音声合成、2026-11-21）も 1.7B を VRAM に載せ、Qwen 27B と同居できないので同じ扱いにする（10 のうち同時に動くのは 1 つ）。
 # 公式版 IQ3_S（strata-official-iq3s）・Swift 1.5（strata-swift）は 2026-10-16 に足した（RAM・VRAM の使い方は汎用版・公式版と同じ程度）。
 GPU_EXCLUSIVE_KEYS = ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official",
-                      "strata-official-iq3s", "strata-swift", "audiocraft")
+                      "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts")
 
 # 起動する前に、Ollama に載っているモデルを VRAM から降ろすサービス。Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 とも）は
 # VRAM を大きく使い、Qwen（実測 22 GiB）と同居できない。Hunyuan3D は、当て物 0001 を当てた環境では生成の直前に
 # 自分で降ろす（当て物は公開版に含まない。knowledge の hunyuan3d.md）。
 # Pixal3D・ComfyUI は、これまでの動作（画面の警告で利用者が降ろす）を変えないため対象にしない。
-# AudioCraft は新しいサービスなので、Strata と同じく起動前に降ろす（Qwen の 22 GiB と同居できない）。
+# AudioCraft は新しいサービスなので、Strata と同じく起動前に降ろす（Qwen の 22 GiB と同居できない）。Qwen3-TTS も同じ。
 OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift",
-                                   "audiocraft")
+                                   "audiocraft", "qwen3-tts")
 
 # POST /api/service/<key>/<action> で許可する action と、それぞれの操作の性質。
 ALLOWED_ACTIONS = ("start", "stop")

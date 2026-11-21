@@ -22,23 +22,24 @@ flowchart LR
     h3d["Hunyuan3D :7860"]
     p3d["Pixal3D :7861"]
     audio["AudioCraft :7862<br/>作曲・効果音"]
+    tts["Qwen3-TTS :7863<br/>音声合成"]
     comfy["ComfyUI :8188"]
     gpu[("A30 24 GiB")]
   end
 
   browser --> portal
-  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & comfy
-  portal -- "Strata・AudioCraft の起動前にモデルを降ろす" --> ollama
+  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & tts & comfy
+  portal -- "Strata・AudioCraft・Qwen3-TTS の起動前にモデルを降ろす" --> ollama
   browser --> webui
   webui --> ollama & strata
   cloud -- "MCP" --> bridge["local-ai-bridge<br/>qwen-worker"]
   other -- "SSH" --> bridge
   bridge --> ollama
-  ollama & strata & h3d & p3d & audio & comfy --> gpu
+  ollama & strata & h3d & p3d & audio & tts & comfy --> gpu
 ```
 
-- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI・AudioCraft も重みを載せる）。
-  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata と AudioCraft の
+- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI・AudioCraft・Qwen3-TTS も重みを載せる）。
+  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata・AudioCraft・Qwen3-TTS の
   起動前に自動で降ろす。3D 生成・ComfyUI を起動する前は、画面の案内に従って Ollama のモデルを降ろす。
 - 入口ページ以外のサービスは systemd の user unit で、`enable` しない（自動起動は入口ページだけ）。
   理由は、3D 生成の低 VRAM モードが重みを CPU 側に置いて RAM を使い切り、デスクトップごと固まった経験による。
@@ -69,6 +70,7 @@ flowchart LR
 | Hunyuan3D / Pixal3D | 4 枚の画像から 3D メッシュ | 重みと VRAM を食い合うため排他 |
 | ComfyUI | 水密なメッシュ（ゲーム用アセット）への変換と、文章・画像からの動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast） | ネイティブ部分（CGAL・CUDA 12.6）を自前でビルド。動画の重みは A30 向けに fp8_scaled・GGUF を選ぶ |
 | AudioCraft | 文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）。Gradio 画面（7862） | 2 つのモデルを VRAM に載せるため排他。重みは非商用（CC-BY-NC 4.0）。古い torch 2.1.0 系の専用 venv（Python 3.11・CUDA 12.1 同梱） |
+| Qwen3-TTS | 声の特徴を文章で指定して読み上げる（VoiceDesign 1.7B）。上流の Gradio 画面（7863） | 1.7B を VRAM に載せるため排他（約 4.3〜5.4 GiB）。Python 3.12・torch 2.9.1+cu126 の専用 venv。Apache-2.0 |
 
 Strata の設定は起動のたびに `tools/strata/stra/config.py` の `ModelSpec` と環境変数から作り直される。画面の Settings で
 変えた値は次の起動で消える。思考の予算（`STRATA_REASONING_BUDGET_TOKENS`）などは環境変数で変える。

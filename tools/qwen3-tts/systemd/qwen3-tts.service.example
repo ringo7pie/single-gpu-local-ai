@@ -1,0 +1,31 @@
+[Unit]
+Description=Qwen3-TTS VoiceDesign (qwen-tts-demo, gradio, port 7863)
+# Ollama と VRAM を食い合うので、Ollama のユニットには依存させない（入口ページ tools/portal が起動前に
+# Ollama のモデルを降ろす）。GPU を使うほかのサービスとも同時には載せない。Conflicts= により、こちらを
+# start すると systemd がほかの 9 つを止める（逆も同じ。Conflicts= は双方向に効く）。
+Conflicts=hunyuan3d.service pixal3d.service comfyui.service strata.service strata-coder.service strata-official.service strata-official-iq3s.service strata-swift.service audiocraft.service
+# Conflicts= だけでは止める順番が決まらない。順序は一方向の鎖（こちらがほかの 9 つの後ろ）にして、
+# ほかの 9 つのユニットの側には After=qwen3-tts.service を書かない（両側に書くと順序が輪になる）。
+After=network.target hunyuan3d.service pixal3d.service comfyui.service strata.service strata-coder.service strata-official.service strata-official-iq3s.service strata-swift.service audiocraft.service
+
+[Service]
+Type=simple
+# リポジトリのパスは、setup-server.sh が雛形の印をこの機体の絶対パスに置き換えて書く（scripts/lib/render-unit.sh）。手で写すときは自分で置き換える。
+WorkingDirectory=@REPO_ROOT@/tools/qwen3-tts
+# QWEN3TTS_DTYPE / QWEN3TTS_FLASH_ATTN を読む。先頭の "-" はファイルが無くてもエラーにしない意味。
+EnvironmentFile=-%h/.config/qwen3-tts/qwen3-tts.env
+ExecStart=@REPO_ROOT@/tools/qwen3-tts/run-qwen3-tts serve
+Restart=on-failure
+RestartSec=5
+# 1.7B の重みの読み込み（冷えたディスクキャッシュではさらに長い）。
+TimeoutStartSec=600
+# RAM の安全弁。上限に当たったサービスだけがカーネルに落とされ、デスクトップは巻き込まれない。
+# 既定は MemoryHigh=6G / MemoryMax=8G。2026-11-21 の実測で、起動と生成 3 回（最長 23 秒の音声）を通した
+# cgroup の memory.peak が 1.61 GiB。重みは GPU へ載せたあと RAM をあまり使わないので、長い文の余裕を見て約 4〜5 倍にする。
+# 運用中の値は入口ページ（tools/portal）から変える。変えた値は systemctl set-property の
+# drop-in（~/.config/systemd/user.control/）に入り、このファイルの値より優先される。
+MemoryHigh=6G
+MemoryMax=8G
+
+[Install]
+WantedBy=default.target

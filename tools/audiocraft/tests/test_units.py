@@ -394,7 +394,16 @@ def test_gpu_conflict_units_match_portal_exclusive_keys() -> None:
     match = re.search(r"GPU_EXCLUSIVE_KEYS = \(([^)]*)\)", portal_text)
     assert match is not None
     portal_keys = re.findall(r'"([^"]+)"', match.group(1))
-    assert set(portal_keys) == set(cli.GPU_CONFLICT_UNITS) | {"audiocraft"}
+    # audiocraft より後に足した GPU サービス（2026-11-21 の qwen3-tts など）は、相手の雛形の Conflicts= に
+    # audiocraft.service を書いてある（Conflicts= は双方向に効くので、こちらの雛形は変えない）。それを読んで確かめる。
+    later_units = set()
+    for key in set(portal_keys) - set(cli.GPU_CONFLICT_UNITS) - {"audiocraft"}:
+        template = TOOL_DIR.parent / key / "systemd" / f"{key}.service.example"
+        assert template.is_file(), f"{key} の雛形が無い: {template}"
+        conflicts = next(line for line in template.read_text(encoding="utf-8").splitlines() if line.startswith("Conflicts="))
+        assert "audiocraft.service" in conflicts.split("=", 1)[1].split(), f"{key} の Conflicts= に audiocraft.service が無い"
+        later_units.add(key)
+    assert set(portal_keys) == set(cli.GPU_CONFLICT_UNITS) | {"audiocraft"} | later_units
 
 
 def test_unit_template_uses_placeholder_and_standard_layout() -> None:

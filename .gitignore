@@ -70,6 +70,14 @@ tools/audiocraft/models/
 tools/audiocraft/outputs/
 tools/audiocraft/logs/
 
+# qwen3-tts（音声合成）の仮想環境・モデルの重み・生成物・作業ログ。
+# 再作成: tools/qwen3-tts/setup-server.sh
+tools/qwen3-tts/.venv/
+tools/qwen3-tts/models/
+tools/qwen3-tts/outputs/
+tools/qwen3-tts/logs/
+tools/qwen3-tts/qtts.egg-info/
+
 # qwen-model-bench の結合ツール（llama.cpp のビルド済みバイナリ）と、GGUF の取り込み作業ファイル。
 # 作業ファイルは数十〜百 GB になり、取り込みが終われば消える。
 # 結合ツールの入れ方: tools/qwen-model-bench/README.md
