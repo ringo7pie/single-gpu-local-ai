@@ -9,7 +9,8 @@
 #     （この機体には無く、sudo も使えない）。av は音声ファイルの読み込みにしか使わず、文章からの生成では呼ばれない。
 #   - spacy は上流どおり 3.7.6、transformers は 4.46.0。どちらも PyPI で yanked 扱いだが、固定すれば入る
 #     （spacy は文章の分割だけ、transformers は T5 の符号化だけに使う）。
-#   - pesq / pystoi / demucs / dora-search / treetable は入れない（学習・評価用。生成の経路では import されない）。
+#   - pesq / pystoi / dora-search / treetable は入れない（学習・評価用。生成の経路では import されない）。
+#   - demucs・openunmix・lameenc（メロディ指定に要る）は依存を引かないよう setup-server.sh の [4/8] で --no-deps で入れる。
 #   - gradio は 5.33.0（tools/hunyuan3d と同じ版）。
 # xformers 0.0.22.post7 は cu121 でビルドされた cp311 の wheel が PyPI にある。上流の transformer.py が
 # 先頭で無条件に import するので、無いと audiocraft.modules が import できない。

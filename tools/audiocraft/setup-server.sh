@@ -2,7 +2,7 @@
 # A30 サーバーで AudioCraft（MusicGen Medium / AudioGen Medium。tools/audiocraft、ポート 7862）を導入する。
 # 冪等。再実行は既存物を触らない。
 #
-# torch（cu121。venv で約 5.5GB）と重み・T5 約 8.2GB をダウンロードする。実行前に空きディスクとネットワークを確認すること。
+# torch（cu121。venv で約 5.5GB）と重み・T5 約 11GB（メロディのモデルと htdemucs を含む）をダウンロードする。実行前に空きディスクとネットワークを確認すること。
 # systemd ユニットは配置と daemon-reload だけを行い、enable（自動起動）はしない
 # （GPU を使うサービスは入口ページ tools/portal から使うときだけ起動する方針）。
 set -euo pipefail
@@ -28,6 +28,7 @@ UPSTREAM_COMMIT="896ec7c47f5e5d1e5aa1e4b260c4405328bf009d"
 # wheel が CUDA 12.1 の runtime を同梱するので、システムの CUDA Toolkit（13.2 / 12.6）は使わない。
 TORCH_INDEX_URL="https://download.pytorch.org/whl/cu121"
 TORCH_VERSION="2.1.0+cu121"
+DEMUCS_SPECS="demucs==4.0.1 openunmix==1.3.0 lameenc==1.9.0"
 TORCH_SPEC="torch==2.1.0+cu121"
 TORCHAUDIO_SPEC="torchaudio==2.1.0+cu121"
 TORCHVISION_SPEC="torchvision==0.16.0+cu121"
@@ -148,6 +149,10 @@ fi
 echo
 echo "[4/8] 依存（requirements.lock.txt）"
 "$UV_BIN" pip install --python "$VENV_DIR/bin/python" -r "$TOOL_DIR/requirements.lock.txt"
+# 作曲の「メロディに沿う」モード（musicgen-melody）は、メロディを取る前に demucs（htdemucs）でドラムとベースを除く。
+# demucs 4.0.1 の依存（dora-search など学習用）は推論に要らないので --no-deps で入れ、import に要る 2 つだけ足す
+# （2026-11-23 に import で確かめた: hdemucs.py が openunmix、audio.py が lameenc を先頭で import する）。
+"$UV_BIN" pip install --python "$VENV_DIR/bin/python" --no-deps $DEMUCS_SPECS
 echo "依存: 導入しました"
 
 # ---------------------------------------------------------------- [5/8]
@@ -195,6 +200,8 @@ else
 # 差し替えたら、run-audiocraft fetch-models で重みを取得し直すこと。
 # ACRAFT_MUSIC_MODEL=facebook/musicgen-medium
 # ACRAFT_SOUND_MODEL=facebook/audiogen-medium
+# メロディ指定に使うモデル。none にすると読み込まない（VRAM が約 4 GiB 減る）。
+# ACRAFT_MELODY_MODEL=facebook/musicgen-melody
 ENVFILE
   chmod 644 "$ENV_FILE"
   echo "env ファイル: 作成しました（$ENV_FILE。既定のモデルのまま）"

@@ -7,7 +7,7 @@
 
 This repository is the glue, ops tooling and evaluation harness behind a personal GPU server (NVIDIA A30, 24 GB):
 an LLM server (Ollama), a MoE inference engine that splits experts between CPU and GPU (Strata),
-image-to-3D generation (Hunyuan3D, Pixal3D), text-to-music and sound-effect generation (AudioCraft: MusicGen / AudioGen),
+image-to-3D generation (Hunyuan3D, Pixal3D), text-to-music and sound-effect generation (AudioCraft: MusicGen / AudioGen / MusicGen Melody, and Stable Audio 3.0 Medium),
 text-to-speech with voices designed from a text description (Qwen3-TTS VoiceDesign),
 a ComfyUI watertight-mesh workflow, a bridge that lets Claude Code / Codex
 hand mechanical coding work to a local Qwen, and a harness that compares cloud and local models on the same problems.
@@ -26,8 +26,8 @@ hand mechanical coding work to a local Qwen, and a harness that compares cloud a
 ## Highlights
 
 - **GPU arbitration.** One GPU, several heavy services. A small dependency-free web portal starts and stops them,
-  stops the other running GPU service before it starts one and unloads the Ollama model before a Strata, AudioCraft or
-  Qwen3-TTS start; systemd
+  stops the other running GPU service before it starts one and unloads the Ollama model before a Strata, AudioCraft,
+  Qwen3-TTS or Stable Audio start; systemd
   `Conflicts=` covers the case where someone calls `systemctl` directly.
 - **A MoE model that does not fit in VRAM, served on a 24 GB card.** Strata's engine is built from a pinned commit
   (CUDA 13.2, `sm_80`) and exposed as an OpenAI-compatible API in five variants.
@@ -60,15 +60,16 @@ flowchart LR
     p3d["Pixal3D :7861"]
     audio["AudioCraft :7862"]
     tts["Qwen3-TTS :7863"]
+    sa3["Stable Audio :7864"]
     comfy["ComfyUI :8188"]
     gpu[("A30 24 GB")]
   end
   browser --> portal
-  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & tts & comfy
-  portal -- "unload before Strata / AudioCraft / Qwen3-TTS" --> ollama
+  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & tts & sa3 & comfy
+  portal -- "unload before Strata / AudioCraft / Qwen3-TTS / Stable Audio" --> ollama
   webui --> ollama & strata
   cloud -- "MCP" --> bridge["local-ai-bridge / qwen-worker"] --> ollama
-  ollama & strata & h3d & p3d & audio & tts & comfy --> gpu
+  ollama & strata & h3d & p3d & audio & tts & sa3 & comfy --> gpu
 ```
 
 ## What is in the box
@@ -79,7 +80,8 @@ flowchart LR
 | `tools/portal` | Service portal (port 8080): start / stop, GPU exclusion, memory limits. No dependencies | no |
 | `tools/strata` | MoE CPU–GPU split inference engine, five model variants (ports 8082–8086) | yes |
 | `tools/pixal3d` | Multi-view images → 3D mesh (Pixal3D, port 7861) | yes |
-| `tools/audiocraft` | Text → music and sound effects (MusicGen Medium / AudioGen Medium via AudioCraft, port 7862). Weights are non-commercial (CC-BY-NC 4.0) | yes |
+| `tools/audiocraft` | Text → music and sound effects (MusicGen Medium / AudioGen Medium via AudioCraft, port 7862); continue a given audio clip, or follow its melody (MusicGen Melody). Weights are non-commercial (CC-BY-NC 4.0) | yes |
+| `tools/stable-audio` | Text → music and sound effects with Stable Audio 3.0 Medium (44.1 kHz stereo, up to 380 s, port 7864): audio-to-audio, inpainting and continuation. Gated weights (Stability AI Community License) | yes |
 | `tools/qwen3-tts` | Text → speech with a voice described in natural language (Qwen3-TTS-12Hz-1.7B-VoiceDesign, upstream Gradio demo, port 7863). Apache-2.0 | yes |
 | `tools/hunyuan3d` | Four images → 3D mesh (Hunyuan3D-2mv, port 7860). **Needs license acceptance**, see below | yes |
 | `tools/comfyui` | ComfyUI + watertight-mesh workflow (port 8188); native parts built from source. Also text/image-to-video workflows (HunyuanVideo 1.5, Kandinsky 6.0 Lite, LTX 2.5 Fast) | yes |
@@ -105,7 +107,7 @@ cd single-gpu-local-ai
 ./localai start portal
 ```
 
-Then add what you need: `./localai install strata`, `pixal3d`, `comfyui`, `hunyuan3d`, `audiocraft`, `qwen3-tts`, `qwen-worker`.
+Then add what you need: `./localai install strata`, `pixal3d`, `comfyui`, `hunyuan3d`, `audiocraft`, `qwen3-tts`, `stable-audio`, `qwen-worker`.
 Heavy services are started from the portal (or `./localai start <name>`), one GPU service at a time.
 
 No GPU? You can still read the reports, run the portal and run the unit tests:
@@ -195,5 +197,7 @@ The code and documents in this repository are MIT-licensed ([LICENSE](LICENSE)).
 - **Pixal3D** output is treated as non-commercial (NVIDIA Source Code License components, Meta DINOv3).
 - **AudioCraft** code is MIT, but the MusicGen / AudioGen model weights are CC-BY-NC 4.0 (non-commercial only).
 - **Qwen3-TTS** (`qwen-tts` package and the VoiceDesign weights) is Apache-2.0.
+- **Stable Audio 3.0** code is MIT; the Medium weights are gated on Hugging Face and under the *Stability AI Community License*
+  (free for commercial use below US$1M annual revenue); its T5Gemma text encoder follows the Gemma Terms of Use.
 - Product and company names belong to their owners; this project is not affiliated with or endorsed by them.
 chatgpt mcp のテストです。

@@ -39,9 +39,9 @@ else
 fi
 
 # サービスの一覧。key はそのまま systemd の user unit 名と portal の API の key になる。
-SERVICE_KEYS=(portal open-webui strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft qwen3-tts)
+SERVICE_KEYS=(portal open-webui strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft qwen3-tts stable-audio)
 # 起動前に ollama のモデルと他の GPU サービスを降ろす必要があるもの（tools/portal/portal.py の GPU_EXCLUSIVE_KEYS）。
-GPU_SERVICE_KEYS=(strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft qwen3-tts)
+GPU_SERVICE_KEYS=(strata strata-coder strata-official strata-official-iq3s strata-swift pixal3d hunyuan3d comfyui audiocraft qwen3-tts stable-audio)
 
 usage() {
   cat <<EOF
@@ -49,7 +49,7 @@ usage() {
 
   doctor                       この機体で動かせるかを点検する。NG があれば終了コード 1
   install [<名前> [引数...]]   導入。名前なしで一覧と最小の導入経路を表示する
-                               名前: portal strata pixal3d comfyui hunyuan3d audiocraft qwen3-tts qwen-worker ollama
+                               名前: portal strata pixal3d comfyui hunyuan3d audiocraft qwen3-tts stable-audio qwen-worker ollama
                                引数は tools/<名前>/setup-server.sh へそのまま渡す
                                （例: localai install strata --model coder）
   start   <サービス>           起動する
@@ -160,6 +160,7 @@ service_port() {
     comfyui) echo 8188 ;;
     audiocraft) echo 7862 ;;
     qwen3-tts) echo 7863 ;;
+    stable-audio) echo 7864 ;;
     *) echo "" ;;
   esac
 }
@@ -173,7 +174,7 @@ install_hint() {
     strata-official) echo "./localai install strata --model official" ;;
     strata-official-iq3s) echo "./localai install strata --model official-iq3s" ;;
     strata-swift) echo "./localai install strata --model swift" ;;
-    pixal3d | comfyui | hunyuan3d | audiocraft | qwen3-tts) echo "./localai install $1" ;;
+    pixal3d | comfyui | hunyuan3d | audiocraft | qwen3-tts | stable-audio) echo "./localai install $1" ;;
     open-webui) echo "Open WebUI はこのリポジトリの外にある。systemd の user unit open-webui.service を用意する（tools/portal/README.md）" ;;
     *) echo "./localai install" ;;
   esac
@@ -501,7 +502,7 @@ port_belongs_to_unit() {
 check_ports() {
   local entry port unit owner
   for entry in 8080:portal 8081:open-webui 8082:strata 8083:strata-coder 8084:strata-official \
-    8085:strata-official-iq3s 8086:strata-swift 7860:hunyuan3d 7861:pixal3d 7862:audiocraft 7863:qwen3-tts 8188:comfyui 11434:ollama
+    8085:strata-official-iq3s 8086:strata-swift 7860:hunyuan3d 7861:pixal3d 7862:audiocraft 7863:qwen3-tts 7864:stable-audio 8188:comfyui 11434:ollama
   do
     port="${entry%%:*}"
     unit="${entry#*:}"
@@ -547,7 +548,7 @@ run_doctor() {
 # ================================================================ install
 
 # 導入できるツールと、setup-server.sh の場所（リポジトリ相対）。
-INSTALL_NAMES=(portal strata pixal3d comfyui hunyuan3d audiocraft qwen3-tts qwen-worker)
+INSTALL_NAMES=(portal strata pixal3d comfyui hunyuan3d audiocraft qwen3-tts stable-audio qwen-worker)
 
 install_script_path() {
   echo "$REPO_ROOT/tools/$1/setup-server.sh"
@@ -567,8 +568,9 @@ print_install_list() {
   comfyui      ComfyUI と防水メッシュ・動画生成のワークフロー（8188）。約 16 GB。CUDA 12.6
                動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）の重みは --video で +約 111 GiB
   hunyuan3d    4 画像 → 3D メッシュ（7860）。約 23 GB。CUDA 13.2
-  audiocraft   文章 → 作曲・効果音（7862。MusicGen / AudioGen Medium）。約 14 GB。torch 同梱の CUDA 12.1。重みは非商用
+  audiocraft   文章 → 作曲・効果音（7862。MusicGen / AudioGen / MusicGen Melody）。約 17 GB。torch 同梱の CUDA 12.1。重みは非商用
   qwen3-tts    文章 → 音声（7863。Qwen3-TTS VoiceDesign 1.7B。声の特徴を文章で指定）。約 11 GB。torch 同梱の CUDA 12.6
+  stable-audio 文章 → 曲・効果音（7864。Stable Audio 3.0 Medium）。約 17 GB。torch 同梱の CUDA 12.6。重みは gated（HF のトークン）
   qwen-worker  ローカル Qwen を Claude Code / Codex から使う MCP ワーカー
   ollama       公式の導入手順と ollama pull を表示するだけ（実行しない）
 
@@ -861,8 +863,8 @@ run_status() {
 
 # 試験の名前（--only で選ぶ）。コマンドは CLAUDE.md の「ビルドとテスト」と各ツールの tests/ による。
 # GPU を使わないものだけを入れる。実機試験は TEST_SKIP_NAMES に理由つきで載せ、常に SKIP にする。
-TEST_NAMES=(localai portal gpu-watch-gui pixal3d hunyuan3d comfyui audiocraft qwen3-tts strata qwen-worker local-ai-bridge model-eval)
-TEST_SKIP_NAMES=(hunyuan3d-real audiocraft-real qwen3-tts-real local-ai-bridge-real)
+TEST_NAMES=(localai portal localai-mcp gpu-watch-gui pixal3d hunyuan3d comfyui audiocraft qwen3-tts stable-audio strata qwen-worker local-ai-bridge model-eval)
+TEST_SKIP_NAMES=(hunyuan3d-real audiocraft-real qwen3-tts-real stable-audio-real local-ai-bridge-real)
 
 # uvx の Python。tools の試験は標準ライブラリか lock の依存だけなので、版を揃えて結果を安定させる。
 TEST_PYTHON_VERSION="3.12"
@@ -871,12 +873,14 @@ test_description() {
   case "$1" in
     localai) echo "localai コマンド・scripts/build-site.sh・scripts/lib・setup-server.sh の一般化（scripts/tests。偽の PATH で呼ぶ。実機には触れない）" ;;
     portal) echo "入口ページ（tools/portal/tests/test_units.py）" ;;
+    localai-mcp) echo "他の PC 用の MCP（偽の HTTP サーバーで入口ページと各サービスの口を真似る。標準ライブラリだけ）" ;;
     gpu-watch-gui) echo "gpu-watch-gui の値の解釈（GTK は使わない）" ;;
     pixal3d) echo "Pixal3D の設定・コマンド組み立て（torch は import しない）" ;;
     hunyuan3d) echo "Hunyuan3D の設定・コマンド組み立て（標準ライブラリだけ）" ;;
     comfyui) echo "ComfyUI のワークフロー検査・メッシュ計測（numpy・scipy・trimesh）" ;;
     audiocraft) echo "音楽・効果音生成の設定・パラメータ検証・コマンド組み立て・REST の口（偽の Engine。torch・audiocraft は import しない）" ;;
     qwen3-tts) echo "音声合成の設定・コマンド組み立て・ユニット雛形の突き合わせ（torch・qwen-tts は import しない）" ;;
+    stable-audio) echo "Stable Audio の設定・パラメータ検証・コマンド組み立て・REST の口（偽の Engine。torch・上流は import しない）" ;;
     strata) echo "Strata の設定・コマンド組み立て" ;;
     qwen-worker) echo "qwen-worker（venv があれば使い、無ければ uvx で lock の依存を入れる）" ;;
     local-ai-bridge) echo "local-ai-bridge（実機の統合試験を除く。venv があれば使い、無ければ uvx）" ;;
@@ -884,6 +888,7 @@ test_description() {
     hunyuan3d-real) echo "Hunyuan3D の実機試験（GPU と重みを使う。数分）" ;;
     audiocraft-real) echo "音楽・効果音生成の実機試験（GPU と重みを使う。数分）" ;;
     qwen3-tts-real) echo "音声合成の実機試験（GPU と重みを使う。1〜数分）" ;;
+    stable-audio-real) echo "Stable Audio の実機試験（GPU と重みを使う。数分）" ;;
     local-ai-bridge-real) echo "local-ai-bridge の統合試験（OpenCode と Ollama の Qwen を使う）" ;;
     *) echo "" ;;
   esac
@@ -894,6 +899,7 @@ test_skip_reason() {
     hunyuan3d-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop hunyuan3d のあと tools/hunyuan3d/.venv/bin/python tools/hunyuan3d/tests/test_generate_real.py" ;;
     audiocraft-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop audiocraft のあと tools/audiocraft/.venv/bin/python tools/audiocraft/tests/test_generate_real.py" ;;
     qwen3-tts-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop qwen3-tts のあと tools/qwen3-tts/.venv/bin/python tools/qwen3-tts/tests/test_generate_real.py" ;;
+    stable-audio-real) echo "GPU と重みを実際に使う。手で流す: systemctl --user stop stable-audio のあと tools/stable-audio/.venv/bin/python tools/stable-audio/tests/test_generate_real.py" ;;
     local-ai-bridge-real) echo "OpenCode と A30 の Ollama を実際に使う。手で流す: tools/local-ai-bridge/.venv/bin/python -m pytest tools/local-ai-bridge/tests/test_integration.py -q -s" ;;
     *) echo "" ;;
   esac
@@ -1001,6 +1007,9 @@ test_body() {
     portal)
       uvx_pytest -- tools/portal/tests/test_units.py
       ;;
+    localai-mcp)
+      uvx_pytest -- tools/localai-mcp/tests
+      ;;
     gpu-watch-gui)
       uvx_pytest -- tools/gpu-watch-gui/tests/test_units.py
       ;;
@@ -1016,6 +1025,10 @@ test_body() {
       ;;
     qwen3-tts)
       uvx_pytest -- tools/qwen3-tts/tests/test_units.py
+      ;;
+    stable-audio)
+      # REST の口の試験（test_rest.py）は fastapi と httpx が要る。torch・gradio・上流は要らない。
+      uvx_pytest --with fastapi --with httpx -- tools/stable-audio/tests/test_units.py tools/stable-audio/tests/test_rest.py
       ;;
     comfyui)
       # 2 本とも走らせ、どちらかが失敗すれば失敗にする（先に落ちても後ろを試す）。
@@ -1051,11 +1064,13 @@ test_required_path() {
   case "$1" in
     localai) echo "scripts/tests" ;;
     portal) echo "tools/portal/tests/test_units.py" ;;
+    localai-mcp) echo "tools/localai-mcp/tests/test_units.py" ;;
     gpu-watch-gui) echo "tools/gpu-watch-gui/tests/test_units.py" ;;
     pixal3d) echo "tools/pixal3d/tests/test_units.py" ;;
     hunyuan3d) echo "tools/hunyuan3d/tests/test_units.py" ;;
     audiocraft) echo "tools/audiocraft/tests/test_units.py" ;;
     qwen3-tts) echo "tools/qwen3-tts/tests/test_units.py" ;;
+    stable-audio) echo "tools/stable-audio/tests/test_units.py" ;;
     comfyui) echo "tools/comfyui/tests/test_units.py" ;;
     strata) echo "tools/strata/tests" ;;
     qwen-worker) echo "tools/qwen-worker/tests" ;;

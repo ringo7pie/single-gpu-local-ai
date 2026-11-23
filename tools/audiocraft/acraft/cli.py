@@ -51,7 +51,7 @@ else:
                 result["device_name"] = torch.cuda.get_device_name(0)
             except Exception as exc:
                 result["device_name_error"] = str(exc)
-for module_name in ("xformers", "soundfile", "spacy", "transformers", "gradio"):
+for module_name in ("xformers", "soundfile", "spacy", "transformers", "gradio", "demucs"):
     try:
         module = __import__(module_name)
         result[module_name + "_version"] = getattr(module, "__version__", "?")
@@ -166,7 +166,7 @@ def evaluate_probe(probe: Mapping[str, Any], skip_gpu: bool) -> list[tuple[str, 
             )
         )
 
-    for module_name in ("soundfile", "spacy", "transformers", "gradio"):
+    for module_name in ("soundfile", "spacy", "transformers", "gradio", "demucs"):
         error = probe.get(module_name + "_error")
         version = probe.get(module_name + "_version")
         rows.append((f"{module_name} の import", not error, str(error) if error else str(version)))
@@ -214,6 +214,12 @@ def text_encoder_present(hf_home: Path, model_name: str = config.TEXT_ENCODER_MO
         if has_weights and has_tokenizer:
             return True
     return False
+
+
+def demucs_checkpoint_path(torch_home: Path) -> Path:
+    """htdemucs の重みの置き場（torch hub のキャッシュ。demucs が load_state_dict_from_url で読む場所）。"""
+
+    return torch_home / "hub" / "checkpoints" / config.DEMUCS_CHECKPOINT_NAME
 
 
 def summarize_weights(found: list[str], required: tuple[str, ...] = config.WEIGHT_FILES) -> tuple[bool, str]:
@@ -339,7 +345,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
     music_id, sound_id = config.model_ids_from_env(os.environ)
-    print(f"モデル: 作曲={music_id} / 効果音={sound_id}")
+    melody_id = config.melody_model_id_from_env(os.environ)
+    print(f"モデル: 作曲={music_id} / 効果音={sound_id} / メロディ={melody_id or '（読み込まない）'}")
 
     command = build_serve_command(str(config.VENV_PYTHON), args.host, args.port, args.device)
     env = build_runtime_env(os.environ)
@@ -371,9 +378,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     results.append(("上流が指定コミットで checkout 済み", *_check_upstream_commit()))
 
     music_id, sound_id = config.model_ids_from_env(os.environ)
-    for label, repo_id in (("作曲", music_id), ("効果音", sound_id)):
+    melody_id = config.melody_model_id_from_env(os.environ)
+    for label, repo_id in (("作曲", music_id), ("効果音", sound_id), ("メロディ", melody_id)):
+        if repo_id is None:
+            results.append((f"{label}モデルの重み", True, f"使わない設定です（{config.MELODY_MODEL_ENV_VAR}=none）"))
+            continue
         ok, detail = summarize_weights(find_weight_files(config.AUDIOCRAFT_CACHE_DIR, repo_id))
         results.append((f"{label}モデルの重み（{repo_id}）", ok, detail))
+    if melody_id is not None:
+        demucs_path = demucs_checkpoint_path(config.TORCH_HOME_DIR)
+        results.append((f"音源分離（{config.DEMUCS_MODEL_NAME}、メロディ用）の重み", demucs_path.is_file(), str(demucs_path)))
     results.append(
         (
             f"文章の符号化器（{config.TEXT_ENCODER_MODEL}）",
@@ -395,7 +409,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         f"{config.ENV_FILE} が無い（既定のモデル）"
         if not config.ENV_FILE.is_file()
         else f"{config.ENV_FILE}（{config.MUSIC_MODEL_ENV_VAR}={_read_env_file_value(config.MUSIC_MODEL_ENV_VAR)!r}, "
-        f"{config.SOUND_MODEL_ENV_VAR}={_read_env_file_value(config.SOUND_MODEL_ENV_VAR)!r}）"
+        f"{config.SOUND_MODEL_ENV_VAR}={_read_env_file_value(config.SOUND_MODEL_ENV_VAR)!r}, "
+        f"{config.MELODY_MODEL_ENV_VAR}={_read_env_file_value(config.MELODY_MODEL_ENV_VAR)!r}）"
     )
     results.append(("モデル設定（env ファイル）", True, env_note))
 
@@ -412,12 +427,14 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
         return 1
 
     music_id, sound_id = config.model_ids_from_env(os.environ)
+    melody_id = config.melody_model_id_from_env(os.environ)
     overall_rc = 0
     env = build_runtime_env(os.environ)
     for directory in (config.AUDIOCRAFT_CACHE_DIR, config.HF_HOME_DIR, config.TORCH_HOME_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
-    for repo_id in dict.fromkeys((music_id, sound_id)):
+    repo_ids = [music_id, sound_id] + ([melody_id] if melody_id else [])
+    for repo_id in dict.fromkeys(repo_ids):
         found = find_weight_files(config.AUDIOCRAFT_CACHE_DIR, repo_id)
         missing = [name for name in config.WEIGHT_FILES if name not in found]
         if not missing:
@@ -450,13 +467,32 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
         if completed.returncode != 0:
             print(f"失敗しました: {config.TEXT_ENCODER_MODEL}", file=sys.stderr)
             overall_rc = 1
+
+    if melody_id:
+        demucs_path = demucs_checkpoint_path(config.TORCH_HOME_DIR)
+        if demucs_path.is_file():
+            print(f"スキップ（既にあります）: {config.DEMUCS_MODEL_NAME}（{demucs_path.name}）")
+        else:
+            # 上流（demucs）のコードは実行せず、torch hub と同じ置き場へ直接取る。
+            print(f"取得します: {config.DEMUCS_MODEL_NAME}（メロディ用の音源分離）: {config.DEMUCS_CHECKPOINT_URL}")
+            script = (
+                "import torch.hub\n"
+                f"torch.hub.download_url_to_file({config.DEMUCS_CHECKPOINT_URL!r}, {str(demucs_path)!r}, progress=True)\n"
+            )
+            demucs_path.parent.mkdir(parents=True, exist_ok=True)
+            completed = subprocess.run([str(config.VENV_PYTHON), "-c", script], env=env)
+            if completed.returncode != 0:
+                print(f"失敗しました: {config.DEMUCS_MODEL_NAME}", file=sys.stderr)
+                overall_rc = 1
     return overall_rc
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
     try:
+        source = params.source_from_path(args.source) if args.source else None
         request = params.normalize_params(
-            args.kind, args.prompt, args.duration, args.seed, args.top_k, args.top_p, args.temperature, args.cfg_coef
+            args.kind, args.prompt, args.duration, args.seed, args.top_k, args.top_p, args.temperature, args.cfg_coef,
+            args.mode, source,
         )
     except params.ParamError as error:
         print(f"エラー: {error}", file=sys.stderr)
@@ -472,10 +508,19 @@ def cmd_generate(args: argparse.Namespace) -> int:
     from . import engine  # torch / audiocraft を読み込むため、ここまで遅らせる
 
     music_id, sound_id = config.model_ids_from_env(os.environ)
+    melody_id = config.melody_model_id_from_env(os.environ)
     device = None if args.device == "auto" else args.device
-    generator = engine.Engine(music_id, sound_id, device=device)
-    generator.load(kinds=(request.kind,))
-    result = generator.generate(request, out_path=Path(args.out) if args.out else None)
+    generator = engine.Engine(music_id, sound_id, device=device, melody_model_id=melody_id)
+    # 1 件だけなので、要るモデルだけを読み込む（melody はメロディのモデルだけ）。
+    if request.mode == params.MODE_MELODY:
+        generator.load(kinds=(), melody=True)
+    else:
+        generator.load(kinds=(request.kind,), melody=False)
+    try:
+        result = generator.generate(request, out_path=Path(args.out) if args.out else None)
+    except params.ParamError as error:
+        print(f"エラー: {error}", file=sys.stderr)
+        return 2
     print(json.dumps(result.metadata, ensure_ascii=False, indent=2))
     print(f"wav: {result.wav_path}")
     return 0
@@ -492,7 +537,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    serve_parser = subparsers.add_parser("serve", help="画面（Gradio）を起動する。モデルは起動時に 2 つとも読み込む")
+    serve_parser = subparsers.add_parser("serve", help="画面（Gradio）を起動する。モデルは起動時に 3 つ（作曲・効果音・メロディ）とも読み込む")
     serve_parser.add_argument("--port", type=int, default=config.PORT)
     serve_parser.add_argument("--host", default=config.HOST)
     serve_parser.add_argument("--device", default=None, choices=("cuda", "cpu"), help="未指定なら GPU があれば cuda")
@@ -503,7 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--skip-gpu", action="store_true", help="GPU を一切触らずに点検する（CUDA の初期化・VRAM の確認を省く）")
     doctor_parser.set_defaults(func=cmd_doctor)
 
-    fetch_parser = subparsers.add_parser("fetch-models", help="重みと文章の符号化器を取得する（既にあればスキップ。約 8.2 GB）")
+    fetch_parser = subparsers.add_parser("fetch-models", help="重みと文章の符号化器を取得する（既にあればスキップ。約 12 GB）")
     fetch_parser.set_defaults(func=cmd_fetch_models)
 
     generate_parser = subparsers.add_parser("generate", help="画面を通さずに 1 件生成する（実機試験・自動化用）")
@@ -515,6 +560,8 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--top-p", type=float, default=params.DEFAULT_TOP_P, dest="top_p")
     generate_parser.add_argument("--temperature", type=float, default=params.DEFAULT_TEMPERATURE)
     generate_parser.add_argument("--cfg-coef", type=float, default=params.DEFAULT_CFG_COEF, dest="cfg_coef")
+    generate_parser.add_argument("--mode", default=params.MODE_TEXT, choices=params.MODES, help="continuation・melody は --source が要る")
+    generate_parser.add_argument("--source", default=None, help="元の音のファイル（wav・flac・ogg・mp3）")
     generate_parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="cpu なら GPU を一切使わない")
     generate_parser.add_argument("--out", default=None, help="wav の出力先。未指定なら outputs/ に日時入りの名前で置く")
     generate_parser.set_defaults(func=cmd_generate)

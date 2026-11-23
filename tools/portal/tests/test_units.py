@@ -827,7 +827,7 @@ def test_services_to_stop_before_start_ignores_stopped_and_not_installed_in_thre
 def test_comfyui_is_in_gpu_exclusive_group_with_unit_and_no_options():
     assert portal.GPU_EXCLUSIVE_KEYS == (
         "hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift",
-        "audiocraft", "qwen3-tts",
+        "audiocraft", "qwen3-tts", "stable-audio",
     )
     comfyui_service = portal.SERVICES_BY_KEY["comfyui"]
     assert comfyui_service["unit"] == "comfyui"
@@ -1973,10 +1973,10 @@ def test_post_strata_stop_does_not_unload_ollama(running_server, monkeypatch):
 
 
 def test_post_other_exclusive_services_do_not_unload_ollama(running_server, monkeypatch):
-    # 対象は Strata の 5 つ（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と、音楽・効果音生成（audiocraft）・音声合成（qwen3-tts）だけ。
-    # ComfyUI などの起動では、これまでどおり Ollama に触らない。
+    # 対象は Strata の 5 つ（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と、音楽・効果音生成（audiocraft）・音声合成（qwen3-tts）・
+    # Stable Audio（stable-audio）だけ。ComfyUI などの起動では、これまでどおり Ollama に触らない。
     assert portal.OLLAMA_UNLOAD_BEFORE_START_KEYS == (
-        "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts"
+        "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts", "stable-audio"
     )
     events = _record_start_events(monkeypatch, {})
     for key in ("comfyui", "hunyuan3d", "pixal3d", "open-webui"):
@@ -2209,10 +2209,10 @@ def test_build_service_status_strata_coder_starting():
 
 
 def test_services_to_stop_before_start_six_services_are_mutually_exclusive():
-    # 10（hunyuan3d・pixal3d・comfyui・strata・strata-coder・strata-official・strata-official-iq3s・strata-swift・audiocraft・qwen3-tts）のうち
-    # 同時に動くのは 1 つだけ。
+    # 11（hunyuan3d・pixal3d・comfyui・strata・strata-coder・strata-official・strata-official-iq3s・strata-swift・audiocraft・qwen3-tts・
+    # stable-audio）のうち同時に動くのは 1 つだけ。
     exclusive_keys = ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official",
-                      "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts")
+                      "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts", "stable-audio")
     assert set(portal.GPU_EXCLUSIVE_KEYS) == set(exclusive_keys)
     for running_key in exclusive_keys:
         states = {key: ("running" if key == running_key else "stopped") for key in exclusive_keys}
@@ -2251,10 +2251,11 @@ def test_services_to_stop_before_start_ignores_not_installed_strata_coder():
     assert portal.services_to_stop_before_start("comfyui", states) == []
 
 
-def test_ollama_unload_targets_are_all_strata_audiocraft_and_qwen3_tts():
-    # 起動前に Ollama のモデルを降ろす対象は Strata の 5 つ（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と audiocraft・qwen3-tts だけ。
+def test_ollama_unload_targets_are_all_strata_and_audio_services():
+    # 起動前に Ollama のモデルを降ろす対象は Strata の 5 つ（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と
+    # audiocraft・qwen3-tts・stable-audio だけ。
     assert set(portal.OLLAMA_UNLOAD_BEFORE_START_KEYS) == {
-        "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts",
+        "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts", "stable-audio",
     }
     for key in portal.OLLAMA_UNLOAD_BEFORE_START_KEYS:
         assert key in portal.GPU_EXCLUSIVE_KEYS
@@ -2450,17 +2451,17 @@ def test_index_html_glossary_has_strata_coder_and_mentions_both_strata():
     # ポートの説明に 8083 が入っている。
     port_start = glossary_block.index('"ポート":')
     assert "8083" in glossary_block[port_start:port_start + 600]
-    # 排他の説明は 10 を挙げる（音楽・効果音生成で 9、音声合成で 10）。
+    # 排他の説明は 11 を挙げる（音楽・効果音生成で 9、音声合成で 10、Stable Audio で 11）。
     exclusive_start = glossary_block.index('"GPU の排他":')
     exclusive_text = glossary_block[exclusive_start:exclusive_start + 800]
-    assert "Strata Flash-Next Coder" in exclusive_text and "Strata 公式版" in exclusive_text and "10 のサービス" in exclusive_text
+    assert "Strata Flash-Next Coder" in exclusive_text and "Strata 公式版" in exclusive_text and "11 のサービス" in exclusive_text
     assert "Strata 公式版 IQ3_S" in exclusive_text and "Strata Swift 1.5" in exclusive_text
-    assert "音楽・効果音生成" in exclusive_text and "音声合成" in exclusive_text
+    assert "音楽・効果音生成" in exclusive_text and "音声合成" in exclusive_text and "Stable Audio" in exclusive_text
 
 
 def test_index_html_qwen_warning_mentions_all_strata():
-    # Ollama にモデルが載っているときの警告文。Strata は 5 つとも、音楽・効果音生成・音声合成も起動時に自動で降ろす。
-    assert "Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と音楽・効果音生成・音声合成は起動時に自動で降ろします" in _html_text()
+    # Ollama にモデルが載っているときの警告文。Strata は 5 つとも、音楽・効果音生成・Stable Audio・音声合成も起動時に自動で降ろす。
+    assert "Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5）と音楽・効果音生成・Stable Audio・音声合成は起動時に自動で降ろします" in _html_text()
 
 
 def test_index_html_other_gpu_cards_mention_strata_variants_in_exclusive_notes():
@@ -2486,8 +2487,8 @@ def test_strata_official_service_definition_and_order():
     # 汎用の Strata・Coder 版の次に並べる（画面のカードの並びはこの順）。
     service_keys = [service["key"] for service in portal.SERVICES]
     assert service_keys.index("strata-official") == service_keys.index("strata-coder") + 1
-    # サービスは 11（open-webui・strata 5 つ・hunyuan3d・pixal3d・comfyui・audiocraft・qwen3-tts）。
-    assert len(service_keys) == 11
+    # サービスは 12（open-webui・strata 5 つ・hunyuan3d・pixal3d・comfyui・audiocraft・qwen3-tts・stable-audio）。
+    assert len(service_keys) == 12
     # ポートと unit は他のサービスと重ならない（portal 自身の 8080 も含む）。
     ports = [service["port"] for service in portal.SERVICES]
     assert len(ports) == len(set(ports)) and 8080 not in ports
@@ -2668,7 +2669,7 @@ def test_get_api_status_strata_official_not_installed_has_no_controls(running_se
     _, body = _request(running_server, "GET", "/api/status")
     payload = json.loads(body)
     service_by_key = {service["key"]: service for service in payload["services"]}
-    assert len(payload["services"]) == 11
+    assert len(payload["services"]) == 12
     assert service_by_key["strata-official"]["state"] == "not_installed"
     assert service_by_key["strata-official"]["controllable"] is False
     assert service_by_key["strata-official"]["port"] == 8084
@@ -2784,9 +2785,9 @@ def test_audiocraft_service_definition_order_and_memory():
     assert (entry["default_high_gib"], entry["default_max_gib"]) == (16, 20)
     bounds = portal.memory_bounds(62.5)
     assert portal.validate_memory_limits(entry["default_high_gib"], entry["default_max_gib"], bounds) is None
-    # 並びは comfyui の次（その次が末尾の qwen3-tts）
+    # 並びは comfyui の次（その次が qwen3-tts、末尾が stable-audio）
     service_keys = [entry_["key"] for entry_ in portal.SERVICES]
-    assert service_keys.index("audiocraft") == service_keys.index("comfyui") + 1 == len(service_keys) - 2
+    assert service_keys.index("audiocraft") == service_keys.index("comfyui") + 1 == len(service_keys) - 3
     assert "audiocraft" in portal.GPU_EXCLUSIVE_KEYS and "audiocraft" in portal.OLLAMA_UNLOAD_BEFORE_START_KEYS
     # 未導入 → 起動中 → 稼働中の判定はほかのサービスと同じ
     not_installed = portal.build_service_status(service, port_open=False, active_state="unknown", load_state="not-found")
@@ -2810,7 +2811,7 @@ def test_index_html_audiocraft_card_has_required_texts():
     block = _strata_meta_block("audiocraft")
     for field in ("description:", "stoppedReason:", "startingReason:", "note:"):
         assert field in block, f"SERVICE_META.audiocraft に {field} が無い"
-    for word in ("MusicGen Medium", "AudioGen Medium", "英語", "15 秒", "10 GiB"):
+    for word in ("MusicGen Medium", "AudioGen Medium", "MusicGen Melody", "元の音", "英語"):
         assert word in block, word
     # note: 他のサービスと同時に使えないこと・Ollama のモデルが降ろされること・非商用
     for word in ("同時に使えません", "Hunyuan3D", "Pixal3D", "ComfyUI", "Strata", "Ollama のモデルは", "降ろされます", "CC-BY-NC 4.0", "非商用"):
@@ -2882,9 +2883,9 @@ def test_qwen3_tts_service_definition_order_and_memory():
     assert (entry["default_high_gib"], entry["default_max_gib"]) == (6, 8)
     bounds = portal.memory_bounds(62.5)
     assert portal.validate_memory_limits(entry["default_high_gib"], entry["default_max_gib"], bounds) is None
-    # 並びは audiocraft の次（末尾）
+    # 並びは audiocraft の次（その次が末尾の stable-audio）
     service_keys = [entry_["key"] for entry_ in portal.SERVICES]
-    assert service_keys.index("qwen3-tts") == service_keys.index("audiocraft") + 1 == len(service_keys) - 1
+    assert service_keys.index("qwen3-tts") == service_keys.index("audiocraft") + 1 == len(service_keys) - 2
     assert "qwen3-tts" in portal.GPU_EXCLUSIVE_KEYS and "qwen3-tts" in portal.OLLAMA_UNLOAD_BEFORE_START_KEYS
     not_installed = portal.build_service_status(service, port_open=False, active_state="unknown", load_state="not-found")
     assert (not_installed["state"], not_installed["controllable"], not_installed["port"]) == ("not_installed", False, 7863)
@@ -2905,7 +2906,8 @@ def test_qwen3_tts_service_matches_tool_config_and_unit_template():
     assert "MemoryHigh=6G" in unit_text and "MemoryMax=8G" in unit_text
     conflicts_line = next(line for line in unit_text.splitlines() if line.startswith("Conflicts="))
     conflicts = {name.removesuffix(".service") for name in conflicts_line.split("=", 1)[1].split()}
-    assert conflicts == set(portal.GPU_EXCLUSIVE_KEYS) - {"qwen3-tts"}
+    # qwen3-tts より後に足した stable-audio は、相手の雛形の Conflicts= に qwen3-tts.service を書いてある（Conflicts= は双方向に効く）。
+    assert conflicts == set(portal.GPU_EXCLUSIVE_KEYS) - {"qwen3-tts", "stable-audio"}
 
 
 def test_index_html_qwen3_tts_card_has_required_texts():
@@ -3043,3 +3045,55 @@ def test_comfyui_card_links_both_guides():
     hrefs = re.findall(r'href:\s*"(/guides/[^"]+)"', comfyui_block)
     assert hrefs == ["/guides/pixelartistry.html", "/guides/video-generation.html"]
     assert "meta.guides" in html_text
+
+
+# --- stable-audio（Stable Audio 3.0 Medium、2026-11-23 に追加） -------------------------------------
+
+
+def test_stable_audio_service_definition_order_and_memory():
+    service = portal.SERVICES_BY_KEY["stable-audio"]
+    assert (service["port"], service["unit"]) == (7864, "stable-audio")
+    assert "Stable Audio 3.0 Medium" in service["name"]
+    assert portal.find_service_option(service, "low_vram") is None
+    entry = portal.build_memory_entry(service, {"high_gib": 10.0, "max_gib": 12.0, "current_gib": 1.0})
+    bounds = portal.memory_bounds(62.5)
+    assert portal.validate_memory_limits(entry["default_high_gib"], entry["default_max_gib"], bounds) is None
+    service_keys = [entry_["key"] for entry_ in portal.SERVICES]
+    assert service_keys.index("stable-audio") == service_keys.index("qwen3-tts") + 1 == len(service_keys) - 1
+    assert "stable-audio" in portal.GPU_EXCLUSIVE_KEYS and "stable-audio" in portal.OLLAMA_UNLOAD_BEFORE_START_KEYS
+    not_installed = portal.build_service_status(service, port_open=False, active_state="unknown", load_state="not-found")
+    assert (not_installed["state"], not_installed["controllable"], not_installed["port"]) == ("not_installed", False, 7864)
+
+
+def test_stable_audio_service_matches_tool_config_and_unit_template():
+    import importlib.util
+    tool_dir = Path(__file__).resolve().parents[2] / "stable-audio"
+    spec = importlib.util.spec_from_file_location("saudio_config_for_portal_test", tool_dir / "saudio" / "config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    service = portal.SERVICES_BY_KEY["stable-audio"]
+    assert (service["port"], service["unit"]) == (module.PORT, module.SERVICE_UNIT)
+    unit_text = (tool_dir / "systemd" / "stable-audio.service.example").read_text(encoding="utf-8")
+    memory = service["memory_default"]
+    assert f"MemoryHigh={memory['high_gib']}G" in unit_text and f"MemoryMax={memory['max_gib']}G" in unit_text
+    conflicts_line = next(line for line in unit_text.splitlines() if line.startswith("Conflicts="))
+    conflicts = {name.removesuffix(".service") for name in conflicts_line.split("=", 1)[1].split()}
+    assert conflicts == set(portal.GPU_EXCLUSIVE_KEYS) - {"stable-audio"}
+
+
+def test_index_html_stable_audio_card_glossary_and_lists():
+    html = _html_text()
+    block = _strata_meta_block("stable-audio")
+    for field in ("description:", "stoppedReason:", "startingReason:", "note:"):
+        assert field in block, field
+    for word in ("Stable Audio 3.0 Medium", "英語", "同時に使えません", "Ollama のモデルは", "/api/v1/generate", "Community License"):
+        assert word in block, word
+    glossary_block = _extract_js_object_block(html, "GLOSSARY")
+    assert '"Stable Audio":' in glossary_block
+    port_start = glossary_block.index('"ポート":')
+    assert "Stable Audio は 7864" in glossary_block[port_start:port_start + 800]
+    for name in ("GPU_EXCLUSIVE_KEYS", "OLLAMA_UNLOAD_BEFORE_START_KEYS"):
+        line = next(line for line in html.splitlines() if f"const {name} = [" in line)
+        assert '"stable-audio"' in line, name
+    genres_line = next(line for line in html.splitlines() if 'id: "audio"' in line)
+    assert '"stable-audio"' in genres_line

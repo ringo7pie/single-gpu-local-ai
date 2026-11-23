@@ -17,8 +17,9 @@
 | 8086 | Strata Swift 1.5（UkisAI が Qwen3.8-Flash-Next を思考が短く終わるように追加学習した派生の IQ3_XXS。2026-10-16 に追加） | 別途導入。systemd --user のユニット名は `strata-swift`。自動起動しない。ほかの Strata とは同時に動かせない |
 | 7860 | Hunyuan3D（4 枚の画像 → 3D メッシュ） | 別途導入 |
 | 7861 | Pixal3D（1〜4 枚の画像 → 3D メッシュ、別方式） | 別途導入 |
-| 7862 | 音楽・効果音生成（AudioCraft。MusicGen Medium で作曲、AudioGen Medium で効果音。重みは非商用） | 別途導入（`tools/audiocraft`）。systemd --user のユニット名は `audiocraft`。自動起動しない。GPU の排他グループに入る |
+| 7862 | 音楽・効果音生成（AudioCraft。MusicGen Medium で作曲、AudioGen Medium で効果音。元の音の続き・メロディ指定（MusicGen Melody）も。重みは非商用） | 別途導入（`tools/audiocraft`）。systemd --user のユニット名は `audiocraft`。自動起動しない。GPU の排他グループに入る |
 | 7863 | 音声合成（Qwen3-TTS VoiceDesign 1.7B。声の特徴を文章で指定して読み上げる。上流の Gradio 画面） | 別途導入（`tools/qwen3-tts`）。systemd --user のユニット名は `qwen3-tts`。自動起動しない。GPU の排他グループに入る |
+| 7864 | 音楽・効果音生成（Stable Audio 3.0 Medium。44.1 kHz・ステレオ、最長 380 秒。音 → 音・部分の作り直し・続き。自前の画面と REST） | 別途導入（`tools/stable-audio`）。systemd --user のユニット名は `stable-audio`。自動起動しない。GPU の排他グループに入る。重みは gated |
 | 8188 | ComfyUI（1 枚の画像 → 水密メッシュ・低ポリのゲーム用アセット。PixelArtistry のワークフロー） | 別途導入。systemd --user のユニット名は `comfyui` |
 | 11434 | Ollama API | 触らない |
 
@@ -69,7 +70,7 @@ Strata Swift 1.5（`strata-swift`）・Hunyuan3D（`hunyuan3d`）・Pixal3D（`p
 | 項目 | 内容 |
 |---|---|
 | 必須ヘッダ | `X-Portal-Request: 1`（無ければ 403。理由は下記） |
-| 対象 `key` | `open-webui`、`strata`、`strata-coder`、`strata-official`、`strata-official-iq3s`、`strata-swift`、`hunyuan3d`、`pixal3d`、`comfyui`、`audiocraft`、`qwen3-tts` のみ（それ以外の key は 404） |
+| 対象 `key` | `open-webui`、`strata`、`strata-coder`、`strata-official`、`strata-official-iq3s`、`strata-swift`、`hunyuan3d`、`pixal3d`、`comfyui`、`audiocraft`、`qwen3-tts`、`stable-audio` のみ（それ以外の key は 404） |
 | `action` | `start` か `stop` のみ（それ以外は 400） |
 | GET でこのパスを叩いた場合 | 405（誤操作防止。起動・停止は POST のみ） |
 | ユニットがまだ無い（未導入の）サービスを操作しようとした場合 | 409 |
@@ -80,7 +81,7 @@ Strata Swift 1.5（`strata-swift`）・Hunyuan3D（`hunyuan3d`）・Pixal3D（`p
 **認証は無い。LAN 内から誰でも起動・停止を呼べる。** LAN の外には公開していない前提での割り切り。
 そのうえで、次の 2 つで被害の範囲を絞っている。
 
-1. 操作できるユニットは `open-webui`・`strata`・`strata-coder`・`strata-official`・`strata-official-iq3s`・`strata-swift`・`hunyuan3d`・`pixal3d`・`comfyui`・`audiocraft`・`qwen3-tts` の 11 個に固定。利用者が渡した文字列を
+1. 操作できるユニットは `open-webui`・`strata`・`strata-coder`・`strata-official`・`strata-official-iq3s`・`strata-swift`・`hunyuan3d`・`pixal3d`・`comfyui`・`audiocraft`・`qwen3-tts`・`stable-audio` の 12 個に固定。利用者が渡した文字列を
    そのまま `systemctl` へ渡すことはない（`key` で `SERVICES` を引き、こちら側が持つユニット名だけを使う）。
    入口ページ自身（`portal`）は一覧に無いので、自分を止められない。
 2. `X-Portal-Request: 1` ヘッダを必須にしている。ヘッダの無い単純な POST は他サイトの JavaScript からでも
@@ -101,14 +102,14 @@ Hunyuan3D・Pixal3D はどちらも GPU（VRAM）を使う 3D メッシュ生成
 Coder 版（`strata-coder`）は VRAM を大きく、RAM を約 32GB 級使う。公式版（`strata-official`）は汎用版と同程度
 （2026-10-07 の実測で、cgroup の `memory.peak` 50.00 GiB、VRAM は生成中 23,899 MiB）。公式版 IQ3_S（`strata-official-iq3s`）と
 Swift 1.5（`strata-swift`、2026-10-16 に追加）も汎用版・公式版と同じ程度。音楽・効果音生成（`audiocraft`、2026-10-27 に追加）は
-1.5B のモデル 2 つを VRAM に載せる（2026-10-27 の実測で待機時 約 9.8 GiB、生成中 約 10〜11 GiB）。音声合成（`qwen3-tts`、2026-11-21 に追加）は
-1.7B を VRAM に載せる（2026-11-21 の実測で待機時 約 4.3 GiB、生成後 約 5.4 GiB。Qwen 27B の 22 GiB とは同居できない）。A30 1 枚・RAM 62.5 GiB では 10 を
-同時に載せられず、**同時に動かせるのは 10 のうち 1 つだけ**（Strata の 5 つどうしも同時には動かせない）。
+1.5B のモデル 3 つ（2026-11-23 にメロディのモデルを足した）を VRAM に載せる（2026-11-23 の実測で待機時 約 13.2 GiB、生成中 最大 約 16 GiB）。音声合成（`qwen3-tts`、2026-11-21 に追加）は
+1.7B を VRAM に載せる（2026-11-21 の実測で待機時 約 4.3 GiB、生成後 約 5.4 GiB。Qwen 27B の 22 GiB とは同居できない）。Stable Audio 3.0 Medium（`stable-audio`、2026-11-23 に追加）も同じ扱いにする。A30 1 枚・RAM 62.5 GiB では 11 を
+同時に載せられず、**同時に動かせるのは 11 のうち 1 つだけ**（Strata の 5 つどうしも同時には動かせない）。
 **どれかを起動すると、
 他のサービスが動いていれば（稼働中・起動中）自動で先に止めてから起動する。**
 
 - 純粋関数 `services_to_stop_before_start(key, states)`（`portal.py`）が、`GPU_EXCLUSIVE_KEYS =
-  ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts")` のうち
+  ("hunyuan3d", "pixal3d", "comfyui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts", "stable-audio")` のうち
   起動対象以外で running / starting のものの key 一覧を返す。
   例: ComfyUI を起動するとき Pixal3D が running なら `["pixal3d"]`。Open WebUI はグループ外なので
   常に空リスト。
@@ -138,8 +139,8 @@ Strata（汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 とも�
   `/api/ps` に到達できず確認できなかったこと）。VRAM が足りなければ Strata の起動が失敗するおそれがある。
 - Strata が停止中（`stopped`）のときだけ降ろす。すでに稼働中・起動中の Strata への start は何も起こらないので、
   無関係な Qwen の応答を途中で切らない。未導入（409）・他のサービスの停止に失敗した（起動中止）ときも降ろさない。
-- 対象は Strata の 5 つと、`audiocraft`・`qwen3-tts`（Qwen の 22 GiB と同居できないため）だけにしている
-  （`OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts")`）。Hunyuan3D は、上流への当て物 0001 を
+- 対象は Strata の 5 つと、`audiocraft`・`qwen3-tts`・`stable-audio`（Qwen の 22 GiB と同居できないため）だけにしている
+  （`OLLAMA_UNLOAD_BEFORE_START_KEYS = ("strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift", "audiocraft", "qwen3-tts", "stable-audio")`）。Hunyuan3D は、上流への当て物 0001 を
   当てた環境では生成の直前に自分で降ろす（当て物は公開版に含まない。公開版では `serve` の起動時と、手で実行する
   `run-hunyuan3d free-vram` だけ。`knowledge/10-silver/areas/hunyuan3d.md`）。Pixal3D・ComfyUI は、これまでの動作（画面の警告を見て
   利用者が降ろす）を変えないため含めていない。増やすときはこのタプルと、`index.html` の同名の配列に足す
@@ -421,6 +422,17 @@ Swift Open License v1.0。この機体では個人の非商用・研究用途）
 2. `GPU_EXCLUSIVE_KEYS` と `OLLAMA_UNLOAD_BEFORE_START_KEYS` に足した（`portal.py` と `index.html` の両方）。
 3. `index.html` に `SERVICE_META["qwen3-tts"]`・用語集（「音声合成」「VoiceDesign」）・ほかのカードの「GPU の排他」の文言・
    Qwen の警告文・ポートの説明を足した。
+
+### Stable Audio（`stable-audio`）
+
+Stable Audio 3.0 Medium の自前の Gradio 画面と REST（ポート 7864、systemd --user のユニット名 `stable-audio`、自動起動しない）。
+導入と使い方は `tools/stable-audio/README.md`。入口ページ側は qwen3-tts と同じ型:
+
+1. `SERVICES` の末尾（`qwen3-tts` の次）に足した。`options` 無し。メモリ上限の既定値は 16 / 20 GiB（2026-11-23 の実測で cgroup の `memory.peak` 9.70 GiB の約 1.6 倍）。
+2. `GPU_EXCLUSIVE_KEYS` と `OLLAMA_UNLOAD_BEFORE_START_KEYS` に足した（`portal.py` と `index.html` の両方）。
+3. `index.html` に `SERVICE_META["stable-audio"]`・用語集（「Stable Audio」）・ほかのカードの「GPU の排他」の文言・
+   Qwen の警告文・ポートの説明・ジャンル「音系」を足した。カード名は「音楽・効果音生成（Stable Audio 3.0 Medium）」で、
+   AudioCraft と区別するため、ほかの説明文では「Stable Audio」と書く。
 
 ## 別の PC から開く
 

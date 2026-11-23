@@ -7,6 +7,7 @@ fastapi と httpx（TestClient が使う）が要る。無ければ飛ばす。
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import sys
@@ -33,9 +34,10 @@ JSON_HEADERS = {"Content-Type": "application/json"}
 class FakeEngine:
     """Engine の代わり。実際の生成はせず、無音の wav と json を outputs_dir に書く。"""
 
-    def __init__(self, outputs_dir: Path, loaded: tuple[str, ...] = params.KINDS) -> None:
+    def __init__(self, outputs_dir: Path, loaded: tuple[str, ...] = params.KINDS, melody: bool = True) -> None:
         self.outputs_dir = outputs_dir
         self.model_ids = {params.KIND_MUSIC: "fake/musicgen", params.KIND_SOUND: "fake/audiogen"}
+        self.melody_model_id = "fake/musicgen-melody" if melody else None
         self.device = "cpu"
         self._loaded = loaded
         self.requests: list[params.GenerationParams] = []
@@ -47,6 +49,11 @@ class FakeEngine:
     def loaded_kinds(self) -> tuple[str, ...]:
         return self._loaded
 
+    def available_modes(self, kind: str) -> tuple[str, ...]:
+        if kind not in self._loaded:
+            return ()
+        return tuple(m for m in params.KIND_MODES[kind] if m != params.MODE_MELODY or self.melody_model_id)
+
     def generate(self, request, out_path=None, now=None):
         self.requests.append(request)
         self.entered.set()
@@ -54,10 +61,15 @@ class FakeEngine:
             assert self.release.wait(timeout=10), "試験が release を呼ばなかった"
         if self.error is not None:
             raise self.error
+        source_path = None
+        if request.source is not None:
+            # 本物の Engine は soundfile で読む。偽物は中身の先頭で「読めない音」を表す。
+            if request.source.data.startswith(b"BAD"):
+                raise params.ParamError("元の音を音声として読めません（偽）")
         spec = params.KIND_SPECS[request.kind]
         seed = params.resolve_seed(request.seed)
         created_at = now or dt.datetime(2026, 10, 27, 12, 0, 0)
-        stem = params.unique_stem(self.outputs_dir, params.build_output_stem(request.kind, seed, created_at))
+        stem = params.unique_stem(self.outputs_dir, params.build_output_stem(request.kind, seed, created_at, request.mode))
         wav_path, meta_path = params.output_paths(self.outputs_dir, stem)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
         frames = int(request.duration * spec.sample_rate)
@@ -71,7 +83,10 @@ class FakeEngine:
             samples=frames, elapsed_sec=1.234, peak_vram_mib=None, device="cpu", wav_name=wav_path.name, now=created_at,
         )
         meta_path.write_text(json.dumps(metadata), encoding="utf-8")
-        return GenerationResult(wav_path=wav_path, meta_path=meta_path, metadata=metadata)
+        if request.source is not None:
+            source_path = wav_path.with_name(wav_path.stem + "-source.wav")
+            source_path.write_bytes(request.source.data)
+        return GenerationResult(wav_path=wav_path, meta_path=meta_path, metadata=metadata, source_path=source_path)
 
 
 @pytest.fixture()
@@ -154,7 +169,11 @@ def test_health_reports_models_limits_and_pending(client: TestClient) -> None:
     assert payload["max_pending"] == config.REST_MAX_PENDING
     assert payload["kinds"]["music"] == {
         "model": "fake/musicgen", "sample_rate": 32000, "duration_sec": {"min": 1.0, "max": 30.0, "default": 10.0},
+        "modes": ["text", "continuation", "melody"],
     }
+    assert payload["kinds"]["sound"]["modes"] == ["text", "continuation"]
+    assert payload["melody_model"] == "fake/musicgen-melody"
+    assert payload["source_audio"]["max_bytes"] == params.SOURCE_MAX_BYTES
     assert payload["kinds"]["sound"]["sample_rate"] == 16000
     assert payload["kinds"]["sound"]["duration_sec"]["max"] == 20.0
 
@@ -176,6 +195,11 @@ def test_health_reports_models_limits_and_pending(client: TestClient) -> None:
         ({"prompt": "x", "top_k": 0, "top_p": 0}, "両方 0"),
         ({"prompt": "x", "keep": "no"}, "keep は true か false"),
         ({"prompt": "x", "promt": "typo"}, "未知の項目があります: promt"),
+        ({"prompt": "x", "mode": "melody"}, "元の音"),
+        ({"prompt": "x", "mode": "remix"}, "モード"),
+        ({"prompt": "x", "audio_base64": base64.b64encode(b"RIFF").decode()}, "モードが text"),
+        ({"prompt": "x", "mode": "continuation", "audio_base64": "@@@"}, "base64 として読めません"),
+        ({"prompt": "x", "mode": "continuation", "audio_base64": ""}, "audio_base64"),
         ([1, 2], "オブジェクト"),
         ("calm piano", "オブジェクト"),
     ],
@@ -329,3 +353,48 @@ def test_install_routes_keeps_existing_routes_in_front_order(fake_engine: FakeEn
     client = TestClient(app)
     assert client.get("/existing").json() == {"existing": True}
     assert client.get("/api/v1/health").json()["max_pending"] == 3
+
+
+# --------------------------------------------------------------------------
+# 元の音（mode・audio_base64）
+# --------------------------------------------------------------------------
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+@pytest.mark.parametrize("kind, mode", [("music", "continuation"), ("music", "melody"), ("sound", "continuation")])
+def test_source_audio_is_passed_to_the_engine_and_mode_is_in_headers(client: TestClient, fake_engine: FakeEngine, kind, mode) -> None:
+    body = {"prompt": "x", "duration": 5, "mode": mode, "audio_base64": _b64(b"RIFF-fake-audio")}
+    response = post(client, f"/api/v1/{kind}", body)
+    assert response.status_code == 200, response.text
+    request = fake_engine.requests[0]
+    assert request.mode == mode and request.source is not None and request.source.data == b"RIFF-fake-audio"
+    assert response.headers["X-Acraft-Mode"] == mode
+    assert f"-{mode}-" in response.headers["X-Acraft-File"]
+
+
+def test_melody_on_sound_is_rejected(client: TestClient, fake_engine: FakeEngine) -> None:
+    response = post(client, "/api/v1/sound", {"prompt": "x", "mode": "melody", "audio_base64": _b64(b"RIFF")})
+    assert response.status_code == 400 and "モード" in response.json()["error"]
+    assert fake_engine.requests == []
+
+
+def test_unreadable_source_audio_from_the_engine_is_400(client: TestClient) -> None:
+    response = post(client, "/api/v1/music", {"prompt": "x", "mode": "continuation", "audio_base64": _b64(b"BAD audio")})
+    assert response.status_code == 400 and "読めません" in response.json()["error"]
+
+
+def test_keep_false_also_removes_the_source_copy(client: TestClient, fake_engine: FakeEngine) -> None:
+    body = {"prompt": "x", "duration": 5, "mode": "continuation", "audio_base64": _b64(b"RIFF"), "keep": False}
+    assert post(client, "/api/v1/music", body).status_code == 200
+    assert list(fake_engine.outputs_dir.iterdir()) == []
+
+
+def test_melody_mode_is_503_when_the_melody_model_is_not_loaded(tmp_path: Path) -> None:
+    engine = FakeEngine(tmp_path / "outputs", melody=False)
+    client = TestClient(rest.build_app(engine))
+    response = post(client, "/api/v1/music", {"prompt": "x", "mode": "melody", "audio_base64": _b64(b"RIFF")})
+    assert response.status_code == 503 and "melody" in response.json()["error"]
+    assert client.get("/api/v1/health").json()["kinds"]["music"]["modes"] == ["text", "continuation"]

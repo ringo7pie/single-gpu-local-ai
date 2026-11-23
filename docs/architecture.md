@@ -23,23 +23,24 @@ flowchart LR
     p3d["Pixal3D :7861"]
     audio["AudioCraft :7862<br/>作曲・効果音"]
     tts["Qwen3-TTS :7863<br/>音声合成"]
+    sa3["Stable Audio :7864<br/>曲・効果音"]
     comfy["ComfyUI :8188"]
     gpu[("A30 24 GiB")]
   end
 
   browser --> portal
-  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & tts & comfy
-  portal -- "Strata・AudioCraft・Qwen3-TTS の起動前にモデルを降ろす" --> ollama
+  portal -- "systemctl --user" --> webui & strata & h3d & p3d & audio & tts & sa3 & comfy
+  portal -- "Strata・AudioCraft・Qwen3-TTS・Stable Audio の起動前にモデルを降ろす" --> ollama
   browser --> webui
   webui --> ollama & strata
   cloud -- "MCP" --> bridge["local-ai-bridge<br/>qwen-worker"]
   other -- "SSH" --> bridge
   bridge --> ollama
-  ollama & strata & h3d & p3d & audio & tts & comfy --> gpu
+  ollama & strata & h3d & p3d & audio & tts & sa3 & comfy --> gpu
 ```
 
-- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI・AudioCraft・Qwen3-TTS も重みを載せる）。
-  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata・AudioCraft・Qwen3-TTS の
+- **GPU を同時に使えるのは 1 つだけ**（Ollama のモデルは VRAM 約 22 GiB、Strata・3D 生成・ComfyUI・AudioCraft・Qwen3-TTS・Stable Audio も重みを載せる）。
+  どれかを起動するとき、ほかの GPU サービスを止める責任は入口ページ（portal）にある。Ollama のモデルは Strata・AudioCraft・Qwen3-TTS・Stable Audio の
   起動前に自動で降ろす。3D 生成・ComfyUI を起動する前は、画面の案内に従って Ollama のモデルを降ろす。
 - 入口ページ以外のサービスは systemd の user unit で、`enable` しない（自動起動は入口ページだけ）。
   理由は、3D 生成の低 VRAM モードが重みを CPU 側に置いて RAM を使い切り、デスクトップごと固まった経験による。
@@ -69,8 +70,9 @@ flowchart LR
 | Strata | MoE の専門家を CPU と GPU に分担させる推論エンジン（OpenAI 互換 API）。VRAM に収まらない大きな MoE を動かす | 汎用版・Coder 版・公式版・公式版 IQ3_S・Swift 1.5 の 5 種（ポートが別、同時には載せない） |
 | Hunyuan3D / Pixal3D | 4 枚の画像から 3D メッシュ | 重みと VRAM を食い合うため排他 |
 | ComfyUI | 水密なメッシュ（ゲーム用アセット）への変換と、文章・画像からの動画生成（HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast） | ネイティブ部分（CGAL・CUDA 12.6）を自前でビルド。動画の重みは A30 向けに fp8_scaled・GGUF を選ぶ |
-| AudioCraft | 文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）。Gradio 画面（7862） | 2 つのモデルを VRAM に載せるため排他。重みは非商用（CC-BY-NC 4.0）。古い torch 2.1.0 系の専用 venv（Python 3.11・CUDA 12.1 同梱） |
+| AudioCraft | 文章から作曲（MusicGen Medium）と効果音（AudioGen Medium）。元の音の続き・メロディ指定（MusicGen Melody）も。Gradio 画面と REST（7862） | 3 つのモデルを VRAM に載せるため排他。重みは非商用（CC-BY-NC 4.0）。古い torch 2.1.0 系の専用 venv（Python 3.11・CUDA 12.1 同梱） |
 | Qwen3-TTS | 声の特徴を文章で指定して読み上げる（VoiceDesign 1.7B）。上流の Gradio 画面（7863） | 1.7B を VRAM に載せるため排他（約 4.3〜5.4 GiB）。Python 3.12・torch 2.9.1+cu126 の専用 venv。Apache-2.0 |
+| Stable Audio | 文章から曲・効果音（Stable Audio 3.0 Medium、44.1 kHz・ステレオ、最長 380 秒）。音 → 音・部分の作り直し・続き。自前の Gradio 画面と REST（7864） | 排他。Python 3.12・torch 2.7.1+cu126・flash-attn 2.8.3 の専用 venv。重みは gated（Stability AI Community License） |
 
 Strata の設定は起動のたびに `tools/strata/stra/config.py` の `ModelSpec` と環境変数から作り直される。画面の Settings で
 変えた値は次の起動で消える。思考の予算（`STRATA_REASONING_BUDGET_TOKENS`）などは環境変数で変える。

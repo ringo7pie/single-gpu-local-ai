@@ -22,8 +22,9 @@
 | Strata（5 種のどれか 1 つ） | 要 | 空きをエキスパートのキャッシュに使う | **64 GB 級**（汎用版はエキスパート 53.3 GiB。resident モードで 40.56 GiB を RAM に固定） | 約 100 GB（汎用版のモデル 約 89 GB + MTP 約 5 GB。公式版 IQ3_XXS +47 GB、公式版 IQ3_S +55 GB、Swift 1.5 +76 GB、Coder +58 GB） | 13.2（engine を sm_80 でビルド） |
 | Pixal3D | 要 | 低 VRAM モードあり | 大（低 VRAM モードは重みを CPU 側に置く） | 約 30 GB | 12.6 |
 | Hunyuan3D | 要 | 低 VRAM モードあり | 大 | 約 23 GB（形状のみなら約 5 GB） | 13.2 |
-| AudioCraft（MusicGen・AudioGen の Medium 2 つ） | 要 | 2 つの 1.5B モデルを常駐。待機時 約 9.8 GiB、生成中 約 10〜11 GiB（2026-10-27 の実測。上流の文書は Medium に 16 GB 以上の GPU を推奨） | 小（cgroup の memory.peak 6.06 GiB） | 約 14 GB（重みと T5 約 8.2 GB + venv 約 5.5 GB） | wheel に同梱（12.1。システムの CUDA Toolkit は使わない） |
+| AudioCraft（MusicGen・AudioGen の Medium と MusicGen Melody） | 要 | 3 つの 1.5B モデルを常駐。待機時 約 13.2 GiB、生成中 最大 約 16 GiB（2026-11-23 の実測。`ACRAFT_MELODY_MODEL=none` なら待機時 約 9.8 GiB。上流の文書は Medium に 16 GB 以上の GPU を推奨） | 小（cgroup の memory.peak 4.99〜6.06 GiB） | 約 17 GB（重み・T5・htdemucs 約 11 GB + venv 約 5.5 GB） | wheel に同梱（12.1。システムの CUDA Toolkit は使わない） |
 | Qwen3-TTS（VoiceDesign 1.7B） | 要 | 待機時 約 4.3 GiB、生成後 約 5.4 GiB（nvidia-smi。2026-11-21 の実測。flash-attn なしの sdpa） | 小（cgroup の memory.peak 1.61 GiB） | 約 11 GB（重み 4.3 GB + venv 6.6 GB） | wheel に同梱（12.6。システムの CUDA Toolkit は使わない） |
+| Stable Audio 3.0 Medium | 要 | 待機時 約 9.1 GiB、生成中 最大 約 9.8 GiB（nvidia-smi。2026-11-23 の実測。flash-attn が必須） | 中（cgroup の memory.peak 9.70 GiB。読み込み中が最大） | 約 17 GB（重み 約 10.5 GB（gated）+ venv 約 6 GB） | wheel に同梱（12.6。システムの CUDA Toolkit は使わない） |
 | ComfyUI + 防水メッシュ | 要 | 最大 約 13 GiB（2K の 01b。01・02 は約 11 GiB） | cgroup の memory.peak で 01・02・03 は 23〜27 GiB、2K の 01b（proxy_points 20M）は約 35 GiB（2026-11-03。配布元の 25M では Blender の段で 41 GiB を超え、この機体では通らない） | 重み 約 16 GB + torch | 12.6（WTiVo のビルド） |
 | ComfyUI + 動画生成（HunyuanVideo 1.5・Kandinsky 6.0 Lite・LTX 2.5 Fast） | 要 | 24 GiB をほぼ使い切る（dynamic VRAM loading。LTX の文字エンコーダ bf16 25 GB は入らない分を RAM に置いて動く） | cgroup の anon で 9〜22 GiB（Hunyuan が最大）。続けて流すと MemoryHigh 44 GiB に当たり swap を最大 5 GiB 使う（2026-11-06） | +約 111 GiB（`fetch-models --video`。GGUF Q4_K_XL・fp8_scaled を含む） | 12.6（同じ venv） |
 | qwen-worker・local-ai-bridge | 不要（Ollama を呼ぶ） | — | 小 | 小 | — |

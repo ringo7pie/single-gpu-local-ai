@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import random
@@ -63,6 +64,20 @@ def test_runtime_env_overrides_point_inside_models_dir_and_disable_telemetry() -
 )
 def test_model_ids_from_env(environ, expected) -> None:
     assert config.model_ids_from_env(environ) == expected
+
+
+@pytest.mark.parametrize(
+    "environ, expected",
+    [
+        ({}, "facebook/musicgen-melody"),
+        ({config.MELODY_MODEL_ENV_VAR: "  "}, "facebook/musicgen-melody"),
+        ({config.MELODY_MODEL_ENV_VAR: "none"}, None),
+        ({config.MELODY_MODEL_ENV_VAR: "OFF"}, None),
+        ({config.MELODY_MODEL_ENV_VAR: " facebook/musicgen-stereo-melody "}, "facebook/musicgen-stereo-melody"),
+    ],
+)
+def test_melody_model_id_from_env(environ, expected) -> None:
+    assert config.melody_model_id_from_env(environ) == expected
 
 
 def test_default_models_are_the_medium_ones() -> None:
@@ -468,8 +483,12 @@ def test_parse_rest_body_applies_the_per_kind_default_duration() -> None:
 
 
 def test_parse_rest_body_accepts_every_documented_field() -> None:
-    body = {"prompt": "x", "duration": 7, "seed": 3, "top_k": 100, "top_p": 0.5, "temperature": 0.8, "cfg_coef": 4.0, "keep": False}
+    body = {
+        "prompt": "x", "duration": 7, "seed": 3, "top_k": 100, "top_p": 0.5, "temperature": 0.8, "cfg_coef": 4.0, "keep": False,
+        "mode": "melody", "audio_base64": base64.b64encode(b"RIFF").decode(),
+    }
     request = params.parse_rest_body("music", body)
+    assert request.params.mode == "melody" and request.params.source.data == b"RIFF"
     assert request.keep is False
     assert (request.params.duration, request.params.seed, request.params.top_k) == (7.0, 3, 100)
     assert (request.params.top_p, request.params.temperature, request.params.cfg_coef) == (0.5, 0.8, 4.0)
@@ -514,3 +533,116 @@ def test_help_texts_api_section_matches_the_real_endpoints() -> None:
         assert fragment in api_text, fragment
     for name in params.REST_BODY_FIELDS:
         assert f"`{name}`" in api_text, name
+
+
+# --------------------------------------------------------------------------
+# 元の音（モード・大きさ・長さ）
+# --------------------------------------------------------------------------
+
+SRC = params.SourceAudio(name="a.wav", data=b"RIFF....")
+
+
+def test_kind_modes_melody_is_music_only() -> None:
+    assert params.KIND_MODES["music"] == ("text", "continuation", "melody")
+    assert params.KIND_MODES["sound"] == ("text", "continuation")
+    assert set(params.MODE_LABELS) == set(params.MODES)
+
+
+def test_normalize_params_default_mode_is_text_without_source() -> None:
+    request = params.normalize_params("music", "x", 10)
+    assert request.mode == "text" and request.source is None
+
+
+@pytest.mark.parametrize(
+    "kind, mode, source, duration, fragment",
+    [
+        ("music", "continuation", None, 10, "元の音"),
+        ("music", "melody", None, 10, "元の音"),
+        ("sound", "melody", SRC, 5, "モード"),
+        ("music", "remix", SRC, 10, "モード"),
+        ("music", "text", SRC, 10, "モードが text"),
+        ("music", "continuation", SRC, 1, "1 秒より長く"),
+        ("music", "continuation", params.SourceAudio("e.wav", b""), 10, "空"),
+    ],
+)
+def test_normalize_params_rejects_bad_mode_and_source(kind, mode, source, duration, fragment) -> None:
+    with pytest.raises(params.ParamError) as raised:
+        params.normalize_params(kind, "x", duration, mode=mode, source=source)
+    assert fragment in str(raised.value)
+
+
+def test_normalize_params_accepts_none_and_empty_mode_as_text() -> None:
+    assert params.normalize_params("sound", "x", 5, mode=None).mode == "text"
+    assert params.normalize_params("sound", "x", 5, mode="").mode == "text"
+
+
+def test_source_size_limit() -> None:
+    params.check_source_size(params.SOURCE_MAX_BYTES)
+    with pytest.raises(params.ParamError, match="大きすぎ"):
+        params.check_source_size(params.SOURCE_MAX_BYTES + 1)
+
+
+def test_source_from_path(tmp_path: Path) -> None:
+    assert params.source_from_path(None) is None and params.source_from_path("") is None
+    path = tmp_path / "hum.wav"
+    path.write_bytes(b"RIFFdata")
+    source = params.source_from_path(str(path))
+    assert source.name == "hum.wav" and source.data == b"RIFFdata"
+    with pytest.raises(params.ParamError, match="読めません"):
+        params.source_from_path(str(tmp_path / "missing.wav"))
+
+
+def test_source_from_base64() -> None:
+    source = params.source_from_base64(base64.b64encode(b"RIFFdata").decode() + "\n")
+    assert source.data == b"RIFFdata"
+    for bad in (None, 123, "", "   ", "not base64!!"):
+        with pytest.raises(params.ParamError):
+            params.source_from_base64(bad)
+    with pytest.raises(params.ParamError, match="大きすぎ"):
+        params.source_from_base64("A" * (params.SOURCE_MAX_BYTES * 2))
+
+
+@pytest.mark.parametrize(
+    "kind, mode, seconds, duration, ok",
+    [
+        ("music", "continuation", 5.0, 10.0, True),
+        ("music", "continuation", 9.0, 10.0, True),
+        ("music", "continuation", 9.5, 10.0, False),   # 新しく作る分が 1 秒未満
+        ("music", "continuation", 29.0, 30.0, True),
+        ("sound", "continuation", 8.0, 20.0, True),
+        ("sound", "continuation", 8.5, 20.0, False),   # AudioGen の元の音は 8 秒まで
+        ("music", "melody", 45.0, 10.0, True),         # 長い分は engine が切る
+        ("music", "melody", 61.0, 10.0, False),        # 全体の上限 60 秒
+        ("music", "melody", 0.0, 10.0, False),
+    ],
+)
+def test_check_source_duration(kind, mode, seconds, duration, ok) -> None:
+    if ok:
+        params.check_source_duration(kind, mode, seconds, duration)
+    else:
+        with pytest.raises(params.ParamError):
+            params.check_source_duration(kind, mode, seconds, duration)
+
+
+def test_output_stem_includes_non_text_mode() -> None:
+    assert params.build_output_stem("music", 7, NOW) == f"{NOW:%Y%m%d-%H%M%S}-music-7"
+    assert params.build_output_stem("music", 7, NOW, "melody") == f"{NOW:%Y%m%d-%H%M%S}-music-melody-7"
+
+
+def test_metadata_records_mode_and_source(tmp_path: Path) -> None:
+    request = params.normalize_params("music", "x", 10, mode="continuation", source=SRC)
+    info = {"name": "a.wav", "duration_sec": 4.0, "sample_rate": 44100, "channels": 2, "wav": "s-source.wav"}
+    meta = params.build_metadata(
+        request, resolved_seed=1, model_id="m", sample_rate=32000, samples=320000, elapsed_sec=1.0,
+        peak_vram_mib=None, device="cpu", wav_name="s.wav", now=NOW, source_info=info,
+    )
+    assert meta["mode"] == "continuation" and meta["source"] == info
+    json.dumps(meta)
+    text = help_texts.format_metadata_text(meta)
+    assert "元の音の続き" in text and "a.wav" in text
+
+
+def test_help_texts_mode_help_mentions_the_limits() -> None:
+    assert str(int(params.CONTINUATION_MAX_SOURCE_SECONDS["music"])) in help_texts.MODE_HELP["music"]
+    assert str(int(params.CONTINUATION_MAX_SOURCE_SECONDS["sound"])) in help_texts.MODE_HELP["sound"]
+    assert "メロディ" in help_texts.MODE_HELP["music"]

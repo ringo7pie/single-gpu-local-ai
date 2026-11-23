@@ -12,6 +12,7 @@
 | 7861 | Pixal3D | `pixal3d` | 起動しない |
 | 7862 | 音楽・効果音生成（AudioCraft。`areas/audiocraft.md`） | `audiocraft` | 起動しない |
 | 7863 | 音声合成（Qwen3-TTS VoiceDesign。`areas/qwen3-tts.md`） | `qwen3-tts` | 起動しない |
+| 7864 | 音楽・効果音生成（Stable Audio 3.0 Medium。`areas/stable-audio.md`） | `stable-audio` | 起動しない |
 | 8188 | ComfyUI | `comfyui` | 起動しない |
 | 11434 | Ollama API | `ollama`（system） | 起動する |
 

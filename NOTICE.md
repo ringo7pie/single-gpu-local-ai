@@ -30,6 +30,9 @@ this project is not affiliated with or endorsed by them.
 | Pixal3D | [TencentARC/Pixal3D](https://github.com/TencentARC/Pixal3D) `f7cf3842` | MIT（Copyright (c) 2026 Tencent） | `tools/pixal3d` |
 | AudioCraft | [facebookresearch/audiocraft](https://github.com/facebookresearch/audiocraft) `896ec7c4`（2025-03-13 の main の先頭） | コードは MIT（Copyright (c) Meta Platforms, Inc. and affiliates） | `tools/audiocraft`。音楽（MusicGen）・効果音（AudioGen）の生成。重みのライセンスは下の §3 |
 | qwen-tts（Qwen3-TTS） | [QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)・PyPI の `qwen-tts` 0.1.1 | Apache-2.0 | `tools/qwen3-tts`。画面（`qwen-tts-demo`）も上流のものを使う |
+| stable-audio-3 | [Stability-AI/stable-audio-3](https://github.com/Stability-AI/stable-audio-3) `790793b8`（2026-11-02 の main の先頭） | MIT（Copyright (c) 2026 Stability AI） | `tools/stable-audio`。重みのライセンスは下の §3 |
+| flash-attn | [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention) `v2.8.3`（公式リリースの wheel） | BSD-3-Clause | `tools/stable-audio`（Medium の音声圧縮モデルが必須とする） |
+| demucs | [facebookresearch/demucs](https://github.com/facebookresearch/demucs)・PyPI の `demucs` 4.0.1 | MIT | `tools/audiocraft`（メロディ指定でドラム・ベースを除く）。重み htdemucs も MIT の配布 |
 | TRELLIS.2 | [microsoft/TRELLIS.2](https://github.com/microsoft/TRELLIS.2) `75fbf018` | MIT（Copyright (c) Microsoft Corporation） | Pixal3D の環境・ComfyUI のノードが使う |
 | CuMesh・FlexGEMM | [JeffreyXiang](https://github.com/JeffreyXiang)（ComfyUI 側は visualbruno の fork） | MIT（Copyright (c) 2025 Jianfeng Xiang） | CUDA 拡張。ソースからビルドする |
 | nvdiffrast | [NVlabs/nvdiffrast](https://github.com/NVlabs/nvdiffrast) `v0.4.0` | NVIDIA Source Code License（1-Way Commercial） | **非商用が中心**。大規模な商用利用は NVIDIA との別途の合意が要る |
@@ -58,6 +61,8 @@ this project is not affiliated with or endorsed by them.
 | MusicGen Medium・AudioGen Medium | [facebook/musicgen-medium](https://huggingface.co/facebook/musicgen-medium)・[facebook/audiogen-medium](https://huggingface.co/facebook/audiogen-medium)（Meta） | **CC-BY-NC 4.0（非商用のみ）**。HF のモデルカードの表示。上流の `LICENSE_weights` も同じ |
 | T5（t5-base。文章の符号化器） | [google-t5/t5-base](https://huggingface.co/google-t5/t5-base) | Apache-2.0（配布元の表示）。AudioCraft が文章を符号化するのに使う |
 | Qwen3-TTS-12Hz-1.7B-VoiceDesign | [Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)（Qwen）`5ecdb673` | Apache-2.0（HF のモデルカードの表示） |
+| MusicGen Melody | [facebook/musicgen-melody](https://huggingface.co/facebook/musicgen-melody)（Meta） | **CC-BY-NC 4.0（非商用のみ）**。AudioCraft のメロディ指定に使う |
+| Stable Audio 3.0 Medium（文章の符号化器 T5Gemma を含む） | [stabilityai/stable-audio-3-medium](https://huggingface.co/stabilityai/stable-audio-3-medium) `d4d35793`（**gated**。規約への同意が要る） | **Stability AI Community License**（年間の収益が 100 万米ドル未満は商用も可。超える場合は Enterprise License）。T5Gemma は Gemma の利用規約。同梱しない |
 | DINOv3 | Meta（`camenduru/dinov3-vitl16-pretrain-lvd1689m` は非公式ミラー） | Meta 独自のライセンス。**ミラーを使ってもライセンスは Meta のものに従う。地域制限の有無は上流でも未回答** |
 | 背景除去（BiRefNet） | [ZhengPeng7/BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) | MIT。RMBG-2.0（CC BY-NC 4.0）は使わない |
 | HunyuanVideo 1.5（720p・1080p 化） | [Comfy-Org/Hunyuan-Video-1.5](https://huggingface.co/Comfy-Org/Hunyuan-Video-1.5)（Tencent の重みの再パッケージ） | **Tencent Hunyuan Community License**（EU・英国・韓国は対象地域外。月間 1 億人を超えるサービスは別の許諾） |

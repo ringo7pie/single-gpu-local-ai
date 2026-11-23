@@ -24,7 +24,8 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 - **VRAM に収まらない MoE のモデルを、24 GB のカードで動かす。** Strata（MoE の CPU-GPU 分担推論）を固定コミットから
   ビルドし、OpenAI 互換 API で 5 種（汎用・Coder・公式 IQ3_XXS・公式 IQ3_S・Swift 1.5）出す。
 - **複数枚の画像から 3D メッシュを作る。** Hunyuan3D-2mv（4 枚入力）と Pixal3D（1〜4 枚）、ComfyUI の防水メッシュのワークフロー。
-- **文章から作曲・効果音を作る。** AudioCraft の MusicGen Medium（作曲）と AudioGen Medium（効果音）を、入口ページから起動して使う。重みは非商用（CC-BY-NC 4.0）。
+- **文章から作曲・効果音を作る。** AudioCraft の MusicGen Medium（作曲）と AudioGen Medium（効果音）を、入口ページから起動して使う。元の音の続きや、元の音のメロディに沿った作曲（MusicGen Melody）もできる。重みは非商用（CC-BY-NC 4.0）。
+  Stable Audio 3.0 Medium（44.1 kHz・ステレオ、最長 380 秒。音 → 音・部分の作り直し・続き）も入口ページから使う。重みは gated（Stability AI Community License）。
 - **声の特徴を文章で指定して読み上げる。** Qwen3-TTS VoiceDesign（1.7B、日本語を含む 10 言語）を、入口ページから起動して使う。Apache-2.0。
 - **クラウドの Claude Code / Codex から、機械的な実装の反復だけをローカルの Qwen へ回す。** MCP サーバー
   （qwen-worker・local-ai-bridge）。要求の整理・設計・レビューはクラウドに残す。
@@ -42,6 +43,7 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 | `tools/pixal3d/` | 複数画像から 3D メッシュ（Pixal3D、7861） | 要 |
 | `tools/audiocraft/` | 文章から作曲・効果音（MusicGen / AudioGen Medium、7862）。重みは非商用 | 要 |
 | `tools/qwen3-tts/` | 声の特徴を文章で指定して読み上げ（Qwen3-TTS VoiceDesign 1.7B、7863） | 要 |
+| `tools/stable-audio/` | 文章から曲・効果音（Stable Audio 3.0 Medium、7864）。音 → 音・部分の作り直し・続き。重みは gated | 要 |
 | `tools/hunyuan3d/` | 4 枚の画像から 3D メッシュ（Hunyuan3D-2mv、7860）。**使用許諾の確認が要る**（下記） | 要 |
 | `tools/comfyui/` | ComfyUI と防水メッシュのワークフロー（8188）。WTiVo のネイティブ部分（CGAL・CUDA 12.6）を自前でビルドする | 要 |
 | `tools/qwen-worker/` | ローカル Qwen を Claude Code / Codex から直接使う MCP ワーカー | 不要（Ollama を呼ぶ） |
@@ -61,7 +63,7 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 | 8080 | 入口ページ（portal） | 自動起動するのはこれだけ |
 | 8081 | Open WebUI | 別途導入（このリポジトリには含めない） |
 | 8082 / 8083 / 8084 / 8085 / 8086 | Strata 汎用版 / Coder 版 / 公式版 / 公式版 IQ3_S / Swift 1.5 | 5 つは同時には載せない |
-| 7860 / 7861 / 7862 / 7863 | Hunyuan3D / Pixal3D / AudioCraft（作曲・効果音）/ Qwen3-TTS（音声合成） | 排他 |
+| 7860 / 7861 / 7862 / 7863 / 7864 | Hunyuan3D / Pixal3D / AudioCraft（作曲・効果音）/ Qwen3-TTS（音声合成）/ Stable Audio | 排他 |
 | 8188 | ComfyUI | 排他 |
 | 11434 | Ollama API | 127.0.0.1 のみ |
 
@@ -183,6 +185,7 @@ GPU を使わない試験は `./localai test` でまとめて走る。個別に�
 - **Pixal3D** は出力を収益化しない前提で運用する（NVIDIA の Source Code License・Meta の DINOv3 が混ざる）。
 - **AudioCraft** のコードは MIT だが、MusicGen / AudioGen の重みは CC-BY-NC 4.0（非商用のみ）。作った音を収益化しない前提で運用する。
 - **Qwen3-TTS**（`qwen-tts` と VoiceDesign の重み）は Apache-2.0。
+- **Stable Audio 3.0** のコードは MIT。Medium の重みは Hugging Face で規約への同意が要り（gated）、Stability AI Community License（年間の収益が 100 万米ドル未満なら商用も可）。文章の符号化器 T5Gemma は Gemma の利用規約。
 - 各社の名称・商標は権利者のもの。このリポジトリは提携も承認も受けていない。
 
 ## Claude Code で作業するとき

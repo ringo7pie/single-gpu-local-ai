@@ -10,6 +10,7 @@ HEADER_MD = f"""\
 # {PAGE_TITLE}
 
 文章（説明文）から、**作曲**（MusicGen Medium、1.5B）と **効果音**（AudioGen Medium、1.5B）を作ります。
+**元の音**を指定して、その続きを作ったり（作曲・効果音）、元の音のメロディに沿って作り直したり（作曲。MusicGen Melody、1.5B）もできます。
 このサーバーの GPU（A30）で動いています。ほかの GPU サービス（Qwen・Strata・3D 生成）とは同時に動かせません。
 """
 
@@ -47,6 +48,21 @@ KIND_EXAMPLES = {
     ],
 }
 
+MODE_HELP = {
+    params.KIND_MUSIC: (
+        "「元の音の続き」は元の音のあとを説明文に沿って作ります（出力は元の音を含み、全体が「長さ」になります。"
+        f"元の音は {params.CONTINUATION_MAX_SOURCE_SECONDS[params.KIND_MUSIC]:g} 秒まで、かつ長さより "
+        f"{params.CONTINUATION_MIN_NEW_SECONDS:g} 秒以上短く）。"
+        "「元の音のメロディに沿う」は元の音の旋律（ドラムとベースを除いた音の高さの流れ）を保ち、楽器や雰囲気を説明文のとおりに作り直します"
+        "（元の音は先頭から「長さ」の分だけ使います）。"
+    ),
+    params.KIND_SOUND: (
+        "「元の音の続き」は元の音のあとを説明文に沿って作ります（出力は元の音を含み、全体が「長さ」になります。"
+        f"元の音は {params.CONTINUATION_MAX_SOURCE_SECONDS[params.KIND_SOUND]:g} 秒まで、かつ長さより "
+        f"{params.CONTINUATION_MIN_NEW_SECONDS:g} 秒以上短く）。"
+    ),
+}
+
 DETAIL_HELP = {
     "seed": "同じ説明文・同じ値で同じ seed なら、ほぼ同じ音になります。-1 は毎回乱数で、決まった値は詳細に出ます。",
     "top_k": "次の音の候補を、確率の高い上位何個に絞るか。小さいほど無難、大きいほど多様です（上流の既定 250）。",
@@ -67,8 +83,16 @@ curl -X POST http://<このサーバーのアドレス>:{config.PORT}/api/v1/mus
 ```
 
 - 作曲は `/api/v1/music`、効果音は `/api/v1/sound`。状態は `GET /api/v1/health`。
-- 本文の項目: `prompt`（必須・英語）・`duration`・`seed`・`top_k`・`top_p`・`temperature`・`cfg_coef`・`keep`。省略すると既定になります。
-  `keep` を `false` にすると、サーバーの `outputs/` に wav と json を残しません。
+- 本文の項目: `prompt`（必須・英語）・`duration`・`seed`・`top_k`・`top_p`・`temperature`・`cfg_coef`・`keep`・`mode`・`audio_base64`。
+  省略すると既定になります。`keep` を `false` にすると、サーバーの `outputs/` に wav と json を残しません。
+- 元の音を使うときは `mode` を `continuation`（続き。作曲・効果音）か `melody`（メロディに沿う。作曲だけ）にし、
+  `audio_base64` に音のファイル（wav・flac・ogg・mp3、{params.SOURCE_MAX_BYTES // (1024 * 1024)} MB・{params.SOURCE_MAX_SECONDS:g} 秒まで）の中身を base64 で入れます。
+
+```bash
+{{ printf '{{"prompt": "jazz piano trio", "duration": 15, "mode": "melody", "audio_base64": "'; base64 -w0 hum.wav; printf '"}}'; }} \\
+  | curl -X POST http://<このサーバーのアドレス>:{config.PORT}/api/v1/music -H "Content-Type: application/json" -d @- -o melody.wav
+```
+
 - 実際に使われた seed・長さ・所要時間は、応答のヘッダ（`X-Acraft-Seed`・`X-Acraft-Duration-Sec`・`X-Acraft-Elapsed-Sec`）にあります。
 - 生成は 1 度に 1 件です（この画面の分も含む）。作曲 30 秒で約 33 秒かかるので、クライアントの待ち時間は 2 分以上にしてください。
   混み合うと 503（`Retry-After` 付き）を返します。
@@ -88,8 +112,10 @@ def format_metadata_text(metadata: dict) -> str:
     kind = metadata.get("kind", "")
     spec = params.KIND_SPECS.get(kind)
     label = spec.label if spec else kind
+    mode = metadata.get("mode") or params.MODE_TEXT
     lines = [
         f"種類: {label}（{metadata.get('model', '')}）",
+        f"モード: {params.MODE_LABELS.get(mode, mode)}",
         f"説明文: {metadata.get('prompt', '')}",
         f"長さ: {metadata.get('duration_actual_sec')} 秒（指定 {metadata.get('duration_requested_sec')} 秒）、"
         f"{metadata.get('sample_rate')} Hz",
@@ -99,5 +125,11 @@ def format_metadata_text(metadata: dict) -> str:
     peak = metadata.get("peak_vram_mib")
     if peak is not None:
         lines.append(f"VRAM ピーク（torch の割り当て）: {peak} MiB")
+    source = metadata.get("source")
+    if isinstance(source, dict):
+        lines.append(
+            f"元の音: {source.get('name')}（{source.get('duration_sec')} 秒、{source.get('sample_rate')} Hz、"
+            f"{source.get('channels')} ch。写し {source.get('wav')}）"
+        )
     lines.append(f"ファイル: {metadata.get('wav', '')}")
     return "\n".join(lines)

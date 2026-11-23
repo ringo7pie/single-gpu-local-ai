@@ -38,6 +38,7 @@
 - 2026-11-21 にユーザーの指示で Base（`Qwen/Qwen3-TTS-12Hz-1.7B-Base`）を `qwen-tts-demo ... --ip 0.0.0.0 --port 7864 --no-flash-attn --concurrency 1` で手動起動した。
   重みは `HF_HOME=tools/qwen3-tts/models/hf` に取った（4.3 GB）。VRAM 約 4.4 GiB で、VoiceDesign と同時に載った。
 - これは systemd のユニットでも入口ページの管理下でもない。GPU の排他に入らず、PC の再起動やセッションの終了で止まる。
+- 2026-11-23 からポート 7864 は Stable Audio 3.0 Medium（`stable-audio`）が使う（ユーザーの決定）。Base を手で起動するときは別のポート（例 7865）を使う。
 - 上流は、Base の画面を別の PC のブラウザからマイクで使うには HTTPS（`--ssl-certfile`・`--ssl-keyfile`）が要ると書いている。
 
 ## 他の PC から使う

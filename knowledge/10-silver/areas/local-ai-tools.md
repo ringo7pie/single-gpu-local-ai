@@ -35,3 +35,14 @@
   ローカルに閉じた作業、他の PC からの利用。`/qwen` を実装の既定にしない。実装・調査のサブは Sonnet 5 xHigh。
 - 詳細は `tools/local-ai-bridge/bench/results.json` と
   `knowledge/30-gold/Claude サブエージェントとしての Qwen 評価レポート.html` を Read する。
+
+## 入口ページの AI を他の PC から使う（localai-mcp、2026-11-23）
+
+- 他の PC の Claude Code / Codex からは MCP「localai」（`tools/localai-mcp`）で入口ページ（8080）の全サービスを起動・停止し、各 AI の API を呼ぶ。
+  MCP は他の PC で動き、各サービスのポートへ LAN 越しに直接話す。入出力のファイルは他の PC 側に置く。使い方は `tools/localai-mcp/README.md` を Read する。
+- 起動で他の GPU サービスが止まるとき・Ollama のモデルが降ろされるときは、`stop_others=true` が無い限り起動しない（他人の作業を落とさないため）。
+- `claude mcp add` の `-e` は値をいくつでも取る。名前を先に置く（`claude mcp add -s user localai -e K=V -- cmd`）。`-e` の後ろに名前を置くと
+  `Invalid environment variable format: <名前>` で失敗する。`codex mcp add localai --env K=V -- cmd` は通る（codex-cli 0.169.0）。
+- 実機で確かめたのは、サーバー自身から LAN IP 経由での状態取得、Open WebUI の起動（running まで 15.7 秒）と停止、Stable Audio の REST と Gradio 5.33 での生成、
+  起動の拒否、`claude mcp get` の Connected、`claude -p` からの `localai_status` の呼び出し。Gradio 6.17（Pixal3D・Qwen3-TTS）、Hunyuan3D・Strata・ComfyUI・AudioCraft の
+  実機での呼び出しと、他の PC からの到達は確かめていない。

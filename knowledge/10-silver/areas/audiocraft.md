@@ -4,11 +4,12 @@
 導入と使い方の手順は `tools/audiocraft/README.md` を Read する。ポートは `areas/web-services.md` の表を Read する。
 プログラムから呼ぶ API（REST・Gradio）の事実は `knowledge/10-silver/areas/audiocraft-api.md` を Read する。
 2026-10-27 に導入した。実測値は下の「実測」の節にある。
+元の音のモード（続き・メロディ。2026-11-23 に追加）の事実は `knowledge/10-silver/areas/audiocraft-source.md` を Read する。
 
 ## モデルとライセンス
 
 - 作曲は MusicGen Medium（`facebook/musicgen-medium`、1.5B、32 kHz モノラル、1〜30 秒）、効果音は AudioGen Medium
-  （`facebook/audiogen-medium`、1.5B、16 kHz）。1 つの Gradio 画面のタブ 2 つで使い、起動時に 2 つとも VRAM へ載せる。
+  （`facebook/audiogen-medium`、1.5B、16 kHz）。1 つの Gradio 画面のタブ 2 つで使う。2026-11-23 からはメロディ指定用の `facebook/musicgen-melody` も含め、起動時に 3 つを VRAM へ載せる。
 - コードは MIT、**重みは CC-BY-NC 4.0（非商用のみ）**。作った音を収益化する用途には使わない。
 - 説明文は英語で書く（モデルは英語の説明で学習されている）。上流の文書は Medium に 16 GB 以上の GPU を要ると書く。
 
@@ -24,7 +25,7 @@
   xformers は PyPI の `0.0.22.post7`（cp311 の manylinux wheel）。
 - `av` は 12.0.0 にする。上流の 11.0.0 には cp311 の wheel が無く、ソースからのビルドに ffmpeg の開発ヘッダが要る。
   `av` は音声ファイルの読み込みにしか使わず、文章からの生成では呼ばれない。
-- 学習・評価用の依存（demucs・dora-search・treetable・pesq・pystoi）は入れない。
+- 学習・評価用の依存（dora-search・treetable・pesq・pystoi）は入れない。demucs はメロディ指定に要るので `--no-deps` で入れる（`areas/audiocraft-source.md`）。
 
 ## ffmpeg が無いので wav は soundfile で書く
 

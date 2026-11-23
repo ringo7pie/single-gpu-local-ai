@@ -180,9 +180,11 @@ def test_unit_conflicts_and_after_match_gpu_conflict_units() -> None:
 
 
 def test_other_gpu_units_do_not_order_after_qwen3_tts() -> None:
-    # After= は qwen3-tts 側だけに書く（両側に書くと順序が輪になる）。
+    # After= は qwen3-tts 側だけに書く（両側に書くと順序が輪になる）。輪になりうるのは、qwen3-tts が After= に挙げた
+    # ユニットだけ。qwen3-tts より後に足したユニット（2026-11-23 の stable-audio など）は、同じ型で qwen3-tts の後ろに並ぶ
+    # （After=qwen3-tts.service を持つ）が、qwen3-tts の側はそれを After= に挙げないので輪にならない。
     for template in REPO_ROOT.glob("tools/*/systemd/*.service.example"):
-        if template == UNIT_TEMPLATE:
+        if template == UNIT_TEMPLATE or template.name.removesuffix(".service.example") not in cli.GPU_CONFLICT_UNITS:
             continue
         assert "qwen3-tts.service" not in "".join(
             line for line in template.read_text(encoding="utf-8").splitlines(keepends=True) if line.startswith("After=")

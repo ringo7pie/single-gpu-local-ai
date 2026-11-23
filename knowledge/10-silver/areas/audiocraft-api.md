@@ -2,7 +2,7 @@
 
 audiocraft（`tools/audiocraft`、ポート 7862）を、画面を使わずプログラムから呼ぶ API の運用上の事実。
 モデル・VRAM・RAM・排他は `areas/audiocraft.md` を Read する。経路・本文の項目・応答の一覧は
-`tools/audiocraft/README.md` の「API」を Read する。2026-10-27 に REST の口を足した。
+`tools/audiocraft/README.md` の「API」を Read する。2026-10-27 に REST の口を足した。元の音の項目（`mode`・`audio_base64`）は `areas/audiocraft-source.md` を Read する。
 
 ## 口は 2 つある
 

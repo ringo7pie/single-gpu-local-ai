@@ -24,23 +24,36 @@ def _kind_label(kind: str) -> str:
     return spec.label if spec else kind
 
 
+def _kind_mode_label(kind: str, mode: str) -> str:
+    label = _kind_label(kind)
+    if mode and mode != params.MODE_TEXT:
+        label += f"（{params.MODE_LABELS.get(mode, mode)}）"
+    return label
+
+
 def _recent_rows(limit: int = 20) -> list[list[Any]]:
     """画面の「最近の出力」の表の中身。"""
 
     return [
-        [row["created_at"], _kind_label(row["kind"]), row["prompt"], row["duration"], row["seed"], row["wav"]]
+        [row["created_at"], _kind_mode_label(row["kind"], row.get("mode", "")), row["prompt"], row["duration"], row["seed"], row["wav"]]
         for row in params.list_recent_outputs(config.OUTPUTS_DIR, limit)
     ]
 
 
 def _make_handler(eng: engine_module.Engine, kind: str) -> Callable[..., tuple[str, str, list[list[Any]]]]:
-    def handler(prompt, duration, seed, top_k, top_p, temperature, cfg_coef):
+    def handler(prompt, duration, seed, top_k, top_p, temperature, cfg_coef, mode=params.MODE_TEXT, source_audio=None):
         try:
-            request = params.normalize_params(kind, prompt, duration, seed, top_k, top_p, temperature, cfg_coef)
+            # 説明文だけのモードでは、音の欄に残っているファイルを無視する（欄は隠れているだけ）。
+            source = None if (mode or params.MODE_TEXT) == params.MODE_TEXT else params.source_from_path(source_audio)
+            request = params.normalize_params(
+                kind, prompt, duration, seed, top_k, top_p, temperature, cfg_coef, mode, source
+            )
         except params.ParamError as error:
             raise gr.Error(str(error)) from error
         try:
             result = eng.generate(request)
+        except params.ParamError as error:
+            raise gr.Error(str(error)) from error
         except Exception as error:  # noqa: BLE001 - 画面にはそのまま原因を出す
             traceback.print_exc()
             raise gr.Error(f"生成に失敗しました: {type(error).__name__}: {error}") from error
@@ -60,6 +73,21 @@ def _build_tab(eng: engine_module.Engine, kind: str) -> gr.Dataframe:
         info=f"{params.PROMPT_MAX_CHARS} 文字まで。",
     )
     gr.Examples(examples=[[text] for text in help_texts.KIND_EXAMPLES[kind]], inputs=[prompt], label="例（クリックで入力）")
+    modes = eng.available_modes(kind) or (params.MODE_TEXT,)
+    mode = gr.Radio(
+        choices=[(params.MODE_LABELS[value], value) for value in modes],
+        value=params.MODE_TEXT,
+        label="元の音",
+        info=help_texts.MODE_HELP[kind],
+    )
+    # マイクはブラウザが https か localhost でないと使えない（LAN の http では動かない）ので、アップロードだけにする。
+    source_audio = gr.Audio(
+        label="元の音（wav・flac・ogg・mp3）",
+        type="filepath",
+        sources=["upload"],
+        visible=False,
+    )
+    mode.change(lambda value: gr.update(visible=value != params.MODE_TEXT), inputs=[mode], outputs=[source_audio])
     duration = gr.Slider(
         minimum=spec.min_duration,
         maximum=spec.max_duration,
@@ -85,7 +113,7 @@ def _build_tab(eng: engine_module.Engine, kind: str) -> gr.Dataframe:
     )
     button.click(
         _make_handler(eng, kind),
-        inputs=[prompt, duration, seed, top_k, top_p, temperature, cfg_coef],
+        inputs=[prompt, duration, seed, top_k, top_p, temperature, cfg_coef, mode, source_audio],
         outputs=[audio, info, recent],
         api_name=f"generate_{kind}",
     )
@@ -118,8 +146,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_arg_parser().parse_args()
     music_id, sound_id = config.model_ids_from_env(os.environ)
-    eng = engine_module.Engine(music_id, sound_id, device=args.device)
-    print("[acraft.ui] モデルを読み込んでいます（重みがキャッシュにあれば 15 秒ほど。ディスクから読むときはもっとかかります）...", flush=True)
+    melody_id = config.melody_model_id_from_env(os.environ)
+    eng = engine_module.Engine(music_id, sound_id, device=args.device, melody_model_id=melody_id)
+    print("[acraft.ui] モデルを読み込んでいます（重みがキャッシュにあれば 20 秒ほど。ディスクから読むときはもっとかかります）...", flush=True)
     eng.load()
     print("[acraft.ui] モデルの読み込みが完了しました。", flush=True)
 

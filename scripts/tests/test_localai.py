@@ -330,6 +330,7 @@ def portal_status_body() -> dict[str, object]:
         ("comfyui", 8188),
         ("audiocraft", 7862),
         ("qwen3-tts", 7863),
+        ("stable-audio", 7864),
     ]
     return {
         "gpu": {"used_mib": 16, "total_mib": 24576, "available": True},
@@ -356,7 +357,7 @@ def portal_routes(overrides: dict[tuple[str, str], object] | None = None) -> dic
 
     routes: dict[tuple[str, str], object] = {("GET", "/api/status"): (200, portal_status_body())}
     for key in ("open-webui", "strata", "strata-coder", "strata-official", "strata-official-iq3s", "strata-swift",
-                "hunyuan3d", "pixal3d", "comfyui", "audiocraft", "qwen3-tts"):
+                "hunyuan3d", "pixal3d", "comfyui", "audiocraft", "qwen3-tts", "stable-audio"):
         for action in ("start", "stop"):
             routes[("POST", f"/api/service/{key}/{action}")] = service_action(key, action)
     routes.update(overrides or {})
@@ -412,7 +413,7 @@ def test_test_bad_arguments_exit_2(machine: FakeMachine, arguments: tuple[str, .
 def test_install_without_name_lists_tools_and_minimal_path(machine: FakeMachine) -> None:
     result = machine.run("install")
     assert result.returncode == 0
-    for name in ("portal", "strata", "pixal3d", "comfyui", "hunyuan3d", "audiocraft", "qwen3-tts", "qwen-worker", "ollama"):
+    for name in ("portal", "strata", "pixal3d", "comfyui", "hunyuan3d", "audiocraft", "qwen3-tts", "stable-audio", "qwen-worker", "ollama"):
         assert name in result.stdout
     assert "最小の導入経路" in result.stdout
 
@@ -615,12 +616,14 @@ def test_doctor_port_used_by_its_own_unit_is_ok(machine: FakeMachine) -> None:
 ALL_TEST_PATHS = [
     "scripts/tests/",
     "tools/portal/tests/test_units.py",
+    "tools/localai-mcp/tests/test_units.py",
     "tools/gpu-watch-gui/tests/test_units.py",
     "tools/pixal3d/tests/test_units.py",
     "tools/hunyuan3d/tests/test_units.py",
     "tools/comfyui/tests/test_units.py",
     "tools/audiocraft/tests/test_units.py",
     "tools/qwen3-tts/tests/test_units.py",
+    "tools/stable-audio/tests/test_units.py",
     "tools/strata/tests/",
     "tools/qwen-worker/tests/",
     "tools/local-ai-bridge/tests/",
@@ -648,9 +651,9 @@ def test_test_list_names_every_test_without_running_anything(machine: FakeMachin
     result = machine.run("test", "--list")
     assert result.returncode == 0
     for name in (
-        "localai", "portal", "gpu-watch-gui", "pixal3d", "hunyuan3d", "comfyui", "audiocraft", "qwen3-tts", "strata",
+        "localai", "portal", "localai-mcp", "gpu-watch-gui", "pixal3d", "hunyuan3d", "comfyui", "audiocraft", "qwen3-tts", "stable-audio", "strata",
         "qwen-worker", "local-ai-bridge", "model-eval", "hunyuan3d-real", "audiocraft-real", "qwen3-tts-real",
-        "local-ai-bridge-real",
+        "stable-audio-real", "local-ai-bridge-real",
     ):
         assert name in result.stdout
 
@@ -718,10 +721,10 @@ def test_test_default_runs_every_listed_test_and_skips_the_real_ones(machine: Fa
     log_path = add_fake_uvx(machine)
     result = machine.run("test")
     assert result.returncode == 0, result.stdout
-    assert "OK 12 / FAIL 0 / SKIP 4" in result.stdout
-    # comfyui は 2 回（ワークフロー検査とメッシュ計測）走るので、uvx の呼び出しは 13 回。
+    assert "OK 14 / FAIL 0 / SKIP 5" in result.stdout
+    # comfyui は 2 回（ワークフロー検査とメッシュ計測）走るので、uvx の呼び出しは 15 回。
     calls = uvx_calls(log_path)
-    assert len(calls) == 13
+    assert len(calls) == 15
     assert sum("numpy" in call for call in calls) == 1
     # 依存を持つツールは、venv が無ければ lock を渡す。
     assert any("--with-requirements tools/qwen-worker/requirements.lock.txt" in call for call in calls)

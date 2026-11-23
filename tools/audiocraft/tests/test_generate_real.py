@@ -8,6 +8,9 @@ VRAM を使っていると足りないので、先に止めること。モデル
     tools/audiocraft/.venv/bin/python tools/audiocraft/tests/test_generate_real.py
     tools/audiocraft/.venv/bin/python tools/audiocraft/tests/test_generate_real.py --device cpu --music-seconds 2 --sound-seconds 2
 
+元の音のモードも試す: 自分で作った 3 秒の和音（44.1 kHz ステレオの wav）を元の音にして、作曲の続き・効果音の続き・
+作曲のメロディ指定を 1 件ずつ作る（--skip-source で省く）。
+
 測るもの: 種類ごとの所要時間（読み込み込み）と、nvidia-smi で見た VRAM のピーク、wav の長さ・サンプルレート。
 出力先: tools/audiocraft/outputs/smoke/
 --device cpu のときは GPU を一切使わない（CUDA_VISIBLE_DEVICES を空にして流す）。
@@ -64,13 +67,37 @@ class VramSampler(threading.Thread):
         return self.peak_mib
 
 
-def run_generate(kind: str, seconds: float, device: str) -> dict:
-    out_path = OUTPUT_DIR / f"{kind}.wav"
+SOURCE_SECONDS = 3.0
+
+
+def write_source_wav(path: Path) -> None:
+    """元の音の代わりに、ド・ミ・ソ・ドの順に鳴る 3 秒の音（44.1 kHz ステレオ）を作る。"""
+
+    import numpy as np
+    import soundfile
+
+    rate = 44100
+    notes = (261.63, 329.63, 392.00, 523.25)
+    segment = int(rate * SOURCE_SECONDS / len(notes))
+    pieces = []
+    for frequency in notes:
+        time_axis = np.arange(segment) / rate
+        envelope = np.minimum(1.0, np.linspace(8.0, 0.0, segment))
+        pieces.append(0.4 * envelope * np.sin(2 * np.pi * frequency * time_axis))
+    mono = np.concatenate(pieces).astype("float32")
+    soundfile.write(str(path), np.stack([mono, mono], axis=1), rate, subtype="PCM_16")
+
+
+def run_generate(kind: str, seconds: float, device: str, mode: str = params.MODE_TEXT, source: Path | None = None) -> dict:
+    suffix = "" if mode == params.MODE_TEXT else f"-{mode}"
+    out_path = OUTPUT_DIR / f"{kind}{suffix}.wav"
     command = [
         str(TOOL_DIR / "run-audiocraft"), "generate",
         "--kind", kind, "--prompt", PROMPTS[kind], "--duration", str(seconds),
-        "--seed", "1234", "--device", device, "--out", str(out_path),
+        "--seed", "1234", "--device", device, "--out", str(out_path), "--mode", mode,
     ]
+    if source is not None:
+        command += ["--source", str(source)]
     sampler = VramSampler() if device != "cpu" else None
     if sampler is not None:
         sampler.start()
@@ -81,7 +108,7 @@ def run_generate(kind: str, seconds: float, device: str) -> dict:
     if completed.returncode != 0:
         print(completed.stdout)
         print(completed.stderr, file=sys.stderr)
-        raise SystemExit(f"{kind} の生成に失敗しました（終了コード {completed.returncode}）")
+        raise SystemExit(f"{kind}（{mode}）の生成に失敗しました（終了コード {completed.returncode}）")
 
     import soundfile
 
@@ -92,8 +119,14 @@ def run_generate(kind: str, seconds: float, device: str) -> dict:
     assert info.samplerate == spec.sample_rate, (kind, info.samplerate, spec.sample_rate)
     assert abs(actual_seconds - seconds) <= DURATION_TOLERANCE_SEC, (kind, actual_seconds, seconds)
     assert info.channels == 1, (kind, info.channels)
+    assert metadata["mode"] == mode, (kind, metadata["mode"], mode)
+    if source is not None:
+        assert metadata["source"]["duration_sec"] == SOURCE_SECONDS, metadata["source"]
+        assert out_path.with_name(out_path.stem + "-source.wav").is_file()
     return {
         "kind": kind,
+        "mode": mode,
+        "model": metadata["model"],
         "wav": str(out_path),
         "sample_rate": info.samplerate,
         "seconds": round(actual_seconds, 2),
@@ -109,6 +142,7 @@ def main() -> int:
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
     parser.add_argument("--music-seconds", type=float, default=10.0)
     parser.add_argument("--sound-seconds", type=float, default=5.0)
+    parser.add_argument("--skip-source", action="store_true", help="元の音のモード（続き・メロディ）を試さない")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -116,6 +150,17 @@ def main() -> int:
         run_generate(params.KIND_MUSIC, args.music_seconds, args.device),
         run_generate(params.KIND_SOUND, args.sound_seconds, args.device),
     ]
+    if not args.skip_source:
+        source = OUTPUT_DIR / "source-chord.wav"
+        write_source_wav(source)
+        # 続きは元の音（3 秒）より長くないといけない。
+        music_seconds = max(args.music_seconds, SOURCE_SECONDS + 2)
+        sound_seconds = max(args.sound_seconds, SOURCE_SECONDS + 2)
+        results += [
+            run_generate(params.KIND_MUSIC, music_seconds, args.device, params.MODE_CONTINUATION, source),
+            run_generate(params.KIND_SOUND, sound_seconds, args.device, params.MODE_CONTINUATION, source),
+            run_generate(params.KIND_MUSIC, music_seconds, args.device, params.MODE_MELODY, source),
+        ]
     print(json.dumps(results, ensure_ascii=False, indent=2))
     print("合格: wav の長さ・サンプルレート・チャンネル数が指定どおりです。")
     return 0

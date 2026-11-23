@@ -1,7 +1,8 @@
 """REST の口。文章を JSON で POST すると、生成した wav をそのまま返す。
 
     POST /api/v1/music   作曲（MusicGen）。本文: {"prompt": "...", "duration": 10, "seed": -1, ...}
-    POST /api/v1/sound   効果音（AudioGen）。本文は同じ
+                         元の音を使うときは "mode": "continuation" か "melody" と "audio_base64"（音のファイルの base64）
+    POST /api/v1/sound   効果音（AudioGen）。本文は同じ（mode は text か continuation）
     GET  /api/v1/health  状態と、種類ごとのモデル・サンプルレート・長さの範囲
 
 Gradio の画面（同じポート 7862 の /）と同じ Engine を使うので、生成は画面の分も含めて 1 度に 1 件。
@@ -37,6 +38,8 @@ class EngineLike(Protocol):
     device: str
 
     def loaded_kinds(self) -> tuple[str, ...]: ...
+
+    def available_modes(self, kind: str) -> tuple[str, ...]: ...
 
     def generate(self, request: params.GenerationParams, out_path: Any = None, now: Any = None) -> Any: ...
 
@@ -76,8 +79,9 @@ def _generate_blocking(eng: EngineLike, rest_request: params.RestRequest) -> tup
     result = eng.generate(rest_request.params)
     wav_bytes = result.wav_path.read_bytes()
     if not rest_request.keep:
-        for path in (result.wav_path, result.meta_path):
-            path.unlink(missing_ok=True)
+        for path in (result.wav_path, result.meta_path, getattr(result, "source_path", None)):
+            if path is not None:
+                path.unlink(missing_ok=True)
     return wav_bytes, result.metadata
 
 
@@ -99,6 +103,8 @@ def build_router(eng: EngineLike, gate: PendingGate) -> APIRouter:
                 return _error(400, str(error))
             if kind not in eng.loaded_kinds():
                 return _error(503, f"{params.KIND_SPECS[kind].model_label} のモデルが読み込まれていません。")
+            if rest_request.params.mode not in eng.available_modes(kind):
+                return _error(503, f"モード {rest_request.params.mode} のモデルが読み込まれていません。")
             if not gate.try_enter():
                 return _error(
                     503,
@@ -107,6 +113,9 @@ def build_router(eng: EngineLike, gate: PendingGate) -> APIRouter:
                 )
             try:
                 wav_bytes, metadata = await run_in_threadpool(_generate_blocking, eng, rest_request)
+            except params.ParamError as error:
+                # 元の音が読めない・長さが合わないなど、音を読んでから分かる入力の誤り。
+                return _error(400, str(error))
             except Exception as error:  # noqa: BLE001 - 原因を応答と標準エラーに出す
                 traceback.print_exc(file=sys.stderr)
                 return _error(500, f"生成に失敗しました: {type(error).__name__}: {error}")
@@ -136,11 +145,19 @@ def build_router(eng: EngineLike, gate: PendingGate) -> APIRouter:
             "loaded": list(eng.loaded_kinds()),
             "pending": gate.pending,
             "max_pending": gate.limit,
+            "melody_model": getattr(eng, "melody_model_id", None),
+            "source_audio": {
+                "max_bytes": params.SOURCE_MAX_BYTES,
+                "max_sec": params.SOURCE_MAX_SECONDS,
+                "continuation_max_sec": params.CONTINUATION_MAX_SOURCE_SECONDS,
+                "formats": ["wav", "flac", "ogg", "mp3"],
+            },
             "kinds": {
                 kind: {
                     "model": eng.model_ids[kind],
                     "sample_rate": spec.sample_rate,
                     "duration_sec": {"min": spec.min_duration, "max": spec.max_duration, "default": spec.default_duration},
+                    "modes": list(eng.available_modes(kind)),
                 }
                 for kind, spec in params.KIND_SPECS.items()
             },

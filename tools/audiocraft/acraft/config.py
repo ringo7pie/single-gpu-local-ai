@@ -40,8 +40,19 @@ UPSTREAM_COMMIT = "896ec7c47f5e5d1e5aa1e4b260c4405328bf009d"
 # モデルの選択。env ファイル（EnvironmentFile）で差し替えられる。
 MUSIC_MODEL_ENV_VAR = "ACRAFT_MUSIC_MODEL"
 SOUND_MODEL_ENV_VAR = "ACRAFT_SOUND_MODEL"
+MELODY_MODEL_ENV_VAR = "ACRAFT_MELODY_MODEL"
 DEFAULT_MUSIC_MODEL = "facebook/musicgen-medium"
 DEFAULT_SOUND_MODEL = "facebook/audiogen-medium"
+# 作曲の「メロディに沿う」モードに使う別モデル（1.5B）。env で "none" にすると読み込まない（VRAM を節約するとき）。
+DEFAULT_MELODY_MODEL = "facebook/musicgen-melody"
+MODEL_DISABLED_VALUES = ("none", "off", "0")
+
+# メロディのモデルが音からメロディ（クロマ）を取る前に、ドラムとベースを除くのに使う音源分離（demucs の htdemucs）。
+# 上流の demucs.pretrained.get_model('htdemucs') は torch hub のキャッシュ（TORCH_HOME/hub/checkpoints）から読む。
+# demucs 4.0.1 の remote/files.txt と htdemucs.yaml にある名前（sig 955717e8）。
+DEMUCS_MODEL_NAME = "htdemucs"
+DEMUCS_CHECKPOINT_NAME = "955717e8-8726e21a.th"
+DEMUCS_CHECKPOINT_URL = f"https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/{DEMUCS_CHECKPOINT_NAME}"
 
 # audiocraft の loaders.py が Hugging Face から取る、言語モデルと音声圧縮モデルの重み（1 モデルにつき 2 ファイル）。
 WEIGHT_FILES = ("state_dict.bin", "compression_state_dict.bin")
@@ -51,7 +62,7 @@ WEIGHT_FILES = ("state_dict.bin", "compression_state_dict.bin")
 TEXT_ENCODER_MODEL = "t5-base"
 
 # VRAM の空き確認。Qwen や別の GPU サービスが載っていると起動しない。
-# 2 モデルの重みは fp16 で各約 3〜4 GiB の見込み（実測で見直す）。ここは「ほぼ空」を要求する閾値。
+# 3 モデル（作曲・効果音・メロディ）を常駐させる。ここは「ほぼ空」を要求する閾値。
 VRAM_FREE_THRESHOLD_MIB = 1024
 VRAM_WAIT_SECONDS = 60
 
@@ -65,6 +76,17 @@ def model_ids_from_env(environ):
     music = (environ.get(MUSIC_MODEL_ENV_VAR) or "").strip() or DEFAULT_MUSIC_MODEL
     sound = (environ.get(SOUND_MODEL_ENV_VAR) or "").strip() or DEFAULT_SOUND_MODEL
     return music, sound
+
+
+def melody_model_id_from_env(environ):
+    """環境変数からメロディのモデル ID を決める純粋関数。none / off / 0 なら None（読み込まない）。"""
+
+    value = (environ.get(MELODY_MODEL_ENV_VAR) or "").strip()
+    if not value:
+        return DEFAULT_MELODY_MODEL
+    if value.lower() in MODEL_DISABLED_VALUES:
+        return None
+    return value
 
 
 def runtime_env_overrides():
