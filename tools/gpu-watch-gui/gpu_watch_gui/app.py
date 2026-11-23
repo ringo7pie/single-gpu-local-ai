@@ -362,7 +362,7 @@ class TapoLoginWindow(Gtk.Window):
 
         grid = Gtk.Grid(column_spacing=8, row_spacing=6)
         box.append(grid)
-        self.host_entry = Gtk.Entry(text=host, hexpand=True, placeholder_text="例 192.168.8.128")
+        self.host_entry = Gtk.Entry(text=host, hexpand=True, placeholder_text="例 192.168.1.20")
         self.username_entry = Gtk.Entry(text=username, hexpand=True, placeholder_text="TP-Link ID（メールアドレス）")
         self.password_entry = Gtk.PasswordEntry(show_peek_icon=True, hexpand=True)
         for row, (caption, entry) in enumerate((

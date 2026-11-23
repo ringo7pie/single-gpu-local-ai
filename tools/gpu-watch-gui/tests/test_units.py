@@ -747,16 +747,16 @@ def test_tapo_does_not_change_estimate_values():
 
 def test_tapo_power_parse_credentials_line():
     host, username, password = tapo_power.parse_credentials_line(
-        json.dumps({"host": " 192.168.8.128 ", "username": "a@example.com", "password": "pw"})
+        json.dumps({"host": " 192.168.1.20 ", "username": "a@example.com", "password": "pw"})
     )
-    assert (host, username, password) == ("192.168.8.128", "a@example.com", "pw")
+    assert (host, username, password) == ("192.168.1.20", "a@example.com", "pw")
 
 
 @pytest.mark.parametrize("payload", [
     {"username": "a@example.com", "password": "pw"},
-    {"host": "192.168.8.128", "password": "pw"},
-    {"host": "192.168.8.128", "username": "a@example.com"},
-    {"host": "192.168.8.128", "username": "", "password": ""},
+    {"host": "192.168.1.20", "password": "pw"},
+    {"host": "192.168.1.20", "username": "a@example.com"},
+    {"host": "192.168.1.20", "username": "", "password": ""},
 ])
 def test_tapo_power_parse_credentials_rejects_missing_fields(payload):
     with pytest.raises(tapo_power.CredentialsError):
@@ -776,17 +776,17 @@ def test_tapo_power_parse_credentials_rejects_non_object():
 
 def test_tapo_feed_encode_and_tapo_power_parse_round_trip_with_awkward_password():
     password = 'p"a\\ss\'w0rd=,日本語 ;$(x)'
-    encoded = tapo_feed.encode_credentials("192.168.8.128", "a@example.com", password)
+    encoded = tapo_feed.encode_credentials("192.168.1.20", "a@example.com", password)
     assert encoded.endswith(b"\n") and encoded.count(b"\n") == 1  # 1 行（readline で読める）
-    assert tapo_power.parse_credentials_line(encoded.decode("utf-8")) == ("192.168.8.128", "a@example.com", password)
+    assert tapo_power.parse_credentials_line(encoded.decode("utf-8")) == ("192.168.1.20", "a@example.com", password)
 
 
 def test_tapo_power_read_credentials_from_non_tty_stdin():
     import io
-    stream = io.StringIO(json.dumps({"host": "192.168.8.128", "username": "u", "password": "p"}) + "\n")
-    assert tapo_power.read_credentials(stream, default_host="") == ("192.168.8.128", "u", "p")
-    stream = io.StringIO(json.dumps({"host": "192.168.8.128", "username": "u", "password": "p"}) + "\n")
-    assert tapo_power.read_credentials(stream, default_host="192.168.8.200")[0] == "192.168.8.200"
+    stream = io.StringIO(json.dumps({"host": "192.168.1.20", "username": "u", "password": "p"}) + "\n")
+    assert tapo_power.read_credentials(stream, default_host="") == ("192.168.1.20", "u", "p")
+    stream = io.StringIO(json.dumps({"host": "192.168.1.20", "username": "u", "password": "p"}) + "\n")
+    assert tapo_power.read_credentials(stream, default_host="192.168.1.30")[0] == "192.168.1.30"
 
 
 def test_tapo_power_read_credentials_empty_stdin_raises():
@@ -809,7 +809,7 @@ def test_tapo_power_exit_codes_match_gui_side():
     assert tapo_power.EXIT_FIRST_READ_FAILED == tapo_feed.EXIT_FIRST_READ_FAILED
 
 
-@pytest.mark.parametrize("stdin_text", ["", "not json\n", '{"host": "192.168.8.128"}\n'])
+@pytest.mark.parametrize("stdin_text", ["", "not json\n", '{"host": "192.168.1.20"}\n'])
 def test_tapo_power_script_exits_3_on_bad_stdin(stdin_text):
     result = subprocess.run(
         ["/usr/bin/python3", "-I", str(TAPO_POWER_SCRIPT), "--raw"],
@@ -831,16 +831,16 @@ def test_tapo_power_script_rejects_too_short_interval():
 
 
 def test_tapo_feed_validate_host():
-    assert tapo_feed.validate_host(" 192.168.8.128 ") == (True, "192.168.8.128")
-    for bad in ("", "tapo.local", "http://192.168.8.128", "192.168.8", "192.168.8.300"):
+    assert tapo_feed.validate_host(" 192.168.1.20 ") == (True, "192.168.1.20")
+    for bad in ("", "tapo.local", "http://192.168.1.20", "192.168.1", "192.168.1.300"):
         ok, problem = tapo_feed.validate_host(bad)
         assert ok is False and problem
 
 
 def test_tapo_feed_profile_round_trip_without_password(tmp_path):
     profile_path = tmp_path / "state" / "tapo.json"
-    tapo_feed.save_profile("192.168.8.128", "a@example.com", path=profile_path)
-    assert tapo_feed.load_profile(profile_path) == {"host": "192.168.8.128", "username": "a@example.com"}
+    tapo_feed.save_profile("192.168.1.20", "a@example.com", path=profile_path)
+    assert tapo_feed.load_profile(profile_path) == {"host": "192.168.1.20", "username": "a@example.com"}
     assert (profile_path.stat().st_mode & 0o777) == 0o600
     assert "password" not in profile_path.read_text(encoding="utf-8").lower()
     assert not list(profile_path.parent.glob("*.tmp"))

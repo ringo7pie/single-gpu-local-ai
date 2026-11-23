@@ -52,7 +52,7 @@ def validate_host(text: str) -> Tuple[bool, str]:
     try:
         ipaddress.ip_address(candidate)
     except ValueError:
-        return False, "プラグの IP アドレスを入力してください（例 192.168.8.128）"
+        return False, "プラグの IP アドレスを入力してください（例 192.168.1.20）"
     return True, candidate
 
 
