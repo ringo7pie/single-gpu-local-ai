@@ -17,6 +17,24 @@ Claude Code / Codex から作業を回すための、**運用ツール・連携�
 
 ![入口ページ](docs/images/portal.png)
 
+## 他の PC から使う（MCP・API）
+
+サーバーの AI は、LAN の他の PC から起動・停止・利用できる。他の PC にリポジトリは要らない。
+
+- **Claude Code / Codex から（MCP）。** 他の PC で `http://<server-ip>:8080/` を開き、「他の PC から使う」の欄から
+  **install-localai-mcp.cmd** をダウンロードしてダブルクリックする（Windows）。Linux / macOS は
+  `curl -fsSL http://<server-ip>:8080/remote/setup-remote.sh | bash -s -- <server-ip>`。
+  MCP「localai」（[tools/localai-mcp](tools/localai-mcp/README.md)、標準ライブラリだけ）が登録される。Claude Code を開き直し、
+  `/mcp` で localai が connected になっていれば使える。ツールはスラッシュコマンドには出ないので、
+  「localai の状態を見て」「localai_vfx で透明なオレンジの火花のスプライトを作って」のように文で頼む。
+  できること: 状態の確認、サービスの起動・停止、Ollama のモデルの読み込み・解放、会話、作曲・効果音、Stable Audio、音声合成、
+  画像から 3D、ComfyUI のワークフロー、ゲームのエフェクト `localai_vfx`（Wan 2.1 Alpha の透明度つきの動画、LayerDiffuse + SDXL の透明な 1 枚絵）。
+- **HTTP の API から。** `GET http://<server-ip>:8080/api` がエンドポイント・サービス・ポート・curl の例の一覧。
+  `POST /api/service/<key>/start?wait=<秒>`（ヘッダ `X-Portal-Request: 1`）で起動し、使えるまで待つ（GPU を使うほかのサービスは先に止まる）。
+  ComfyUI（`:8188`）の `/prompt`・`/history`・`/view` で保存済みの API 形式のワークフローを動かせ、プロンプト・シード・大きさ・コマ数が
+  どのノードの入力かは `GET /api` の `comfyui.workflows` にある。詳しくは [tools/portal/README.md](tools/portal/README.md)。
+- 認証は無い。信頼できる LAN の中だけで使う。
+
 ## 何ができるか
 
 - **GPU 1 枚を取り合う複数のサービスを、1 画面で起動・停止する。** 入口ページ（portal）が GPU の排他を取り、

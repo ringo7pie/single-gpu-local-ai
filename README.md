@@ -23,6 +23,25 @@ hand mechanical coding work to a local Qwen, and a harness that compares cloud a
 
 ![Landing page of the service portal](docs/images/portal.png)
 
+## Use it from other PCs: MCP and HTTP API
+
+Every service on the server can be started, stopped and used from another PC on the LAN — no repository checkout needed there.
+
+- **Claude Code / Codex (MCP).** Open `http://<server-ip>:8080/`, download **install-localai-mcp.cmd** from the
+  "他の PC から使う" (use from other PCs) panel and double-click it (Windows). On Linux / macOS:
+  `curl -fsSL http://<server-ip>:8080/remote/setup-remote.sh | bash -s -- <server-ip>`.
+  This registers the MCP server `localai` ([tools/localai-mcp](tools/localai-mcp/README.md), standard library only).
+  Restart Claude Code, check `/mcp` shows `localai` as connected, then ask in plain words
+  ("show the localai status", "make a transparent orange spark sprite with localai_vfx") — the tools are not slash commands.
+  Tools: status, start / stop services, Ollama load / unload, chat, music, sound effects, Stable Audio, TTS, image-to-3D,
+  ComfyUI workflows, and `localai_vfx` for game VFX (transparent RGBA video with Wan 2.1 Alpha, transparent sprites with LayerDiffuse + SDXL).
+- **HTTP API.** `GET http://<server-ip>:8080/api` lists every endpoint, service, port and curl example.
+  `POST /api/service/<key>/start?wait=<sec>` starts a service and waits until it is ready (header `X-Portal-Request: 1`);
+  other GPU services are stopped first. ComfyUI's own API (`:8188`, `/prompt`, `/history`, `/view`) runs saved API-format
+  workflows; `GET /api` → `comfyui.workflows` maps prompt / seed / size / frames to node inputs.
+  See [tools/portal/README.md](tools/portal/README.md).
+- There is no authentication — keep it on a trusted LAN.
+
 ## Highlights
 
 - **GPU arbitration.** One GPU, several heavy services. A small dependency-free web portal starts and stops them,
