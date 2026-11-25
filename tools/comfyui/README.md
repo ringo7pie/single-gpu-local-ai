@@ -72,7 +72,7 @@ tools/comfyui/setup-server.sh
 1. CUDA 12.6 の確認
 2. uv と venv（`tools/comfyui/.venv`、uv 管理の Python 3.12）
 3. ComfyUI 本体を `vendor/ComfyUI` に固定コミットで取得（[1/8] の古さの判定）
-4. custom_nodes 11 個を固定コミットで取得（[2/8]）。動画生成の Kandinsky 6.0 の拡張は `vendor/kandinsky-6` に取り、
+4. custom_nodes 12 個を固定コミットで取得（[2/8]）。動画生成の Kandinsky 6.0 の拡張は `vendor/kandinsky-6` に取り、
    `custom_nodes/kandinsky6` からシンボリックリンクで `vendor/kandinsky-6/comfyui` を指す
 5. torch（cu126）
 6. 依存（`requirements.lock.txt`。torch は入れ替えない制約を付ける）（[4/8]）
@@ -615,9 +615,62 @@ HunyuanVideo の 33 コマ 6.3 分（20 × 16.4 秒）。HunyuanVideo はコマ�
   細部は増えるが、建物に細かい格子状の模様が出た。グループに入っている EasyCache を切っても模様は変わらず（11.8 分）、原因ではない。
   fp8_scaled（公式は fp16）のせいかは確かめていない。
 
+## ゲームのエフェクト（Wan 2.1 Alpha / LayerDiffuse、2026-11-25）
+
+半透明の動く素材（透明度つきの動画）と、透明な 1 枚絵を作る。画面の Workflows → VFX。他の PC からは ComfyUI の HTTP API
+（下の「API 形式」）か、`tools/localai-mcp` の `localai_comfyui`（`workflow_name`）で使う。利用者向けの手順は
+入口ページの ComfyUI のカードの「使い方（ゲームのエフェクト）」（`tools/portal/guides/vfx.html`）。
+
+| 写し（`user/default/workflows/VFX/`） | 土台 | 変えたところ |
+|---|---|---|
+| `WanAlpha_T2V.json` / `WanAlpha_T2V_api.json` | 同梱テンプレート `video_wan2.1_alpha_t2v_14B.json`（標準ノードだけ。custom node なし） | LightX2V の LoRA（テンプレートでは bypass）を有効にして 4 ステップ・cfg 1.0、832x480・81 コマ、seed 42 固定。RGBA の PNG の連番を書く SaveImage（id 93）を足した |
+| `LayerDiffuse_SDXL_RGBA.json` / `LayerDiffuse_SDXL_RGBA_api.json` | ComfyUI-layerdiffuse の `example_workflows/layer_diffusion_fg_example_rgba.json` | チェックポイントを `sd_xl_base_1.0`、1024x1024・20 ステップ・cfg 7、seed 42 固定。RGBA の PreviewImage（id 27）を SaveImage にした |
+
+- 写しは `scripts/adapt_vfx_workflows.py` が書く（`setup-server.sh` の [11/12] は UI 形式だけ）。API 形式は `/object_info` が要るので、
+  ComfyUI の起動後に `.venv/bin/python scripts/adapt_vfx_workflows.py --api` で書く。手直しした写しは上書きしない（`--force` で上書き）。
+- 保存先の名前は `output/dq_vfx_trial/` の下（`wan_alpha_png_*.png`・`wan_alpha_*.webp`・`layerdiffuse_*.png`）。
+- 重みは `run-comfyui fetch-models --skip-3d --vfx`（`--vfx-group wanalpha|layerdiffuse` で片方だけ。10 ファイル 31.7 GiB）。
+  一覧は `cfui/config.py` の `VFX_MODEL_FILES`。sha256 が合わないファイルは消す（動画の `--video` は消さずに残す）。
+- custom node は `ComfyUI-layerdiffuse`（`b4f6a9e0`）だけ。requirements で増えるのは `diffusers==0.43.0` だけで、既存の版は替わらなかった
+  （入れる前後の `uv pip freeze` の差。`requirements.in` / `requirements.lock.txt` に反映）。
+- **ComfyUI v0.41.1 では、上流のままの ComfyUI-layerdiffuse は `LayeredDiffusionDecodeRGBA` で
+  `AttributeError: 'JoinImageWithAlpha' object has no attribute 'join_image_with_alpha'` で落ちる**（標準ノードが V3 になった）。
+  `patches/layerdiffuse-join-alpha-v3.patch` で、新旧どちらでも動くように呼び分ける（`setup-server.sh` の [7/12] の後で当てる）。
+
+### API 形式の入力（`<ノード id>.<入力名>`。POST /prompt の `prompt[<id>]["inputs"][<入力名>]`）
+
+| 何を | WanAlpha_T2V_api.json | LayerDiffuse_SDXL_RGBA_api.json |
+|---|---|---|
+| プロンプト | `6.text` | `6.text` |
+| 否定のプロンプト | `7.text` | `7.text` |
+| シード | `3.seed` | `3.seed` |
+| ステップ・cfg | `3.steps`・`3.cfg` | `3.steps`・`3.cfg` |
+| 幅・高さ | `40.width`・`40.height` | `5.width`・`5.height`（64 の倍数） |
+| コマ数 | `40.length`（4 の倍数 + 1） | — |
+| 保存の接頭辞 | `93.filename_prefix`（PNG の連番）・`80.filename_prefix`（アニメ WebP。`80.fps` は 16） | `27.filename_prefix` |
+
+入口ページの `GET /api` の `comfyui.workflows` にも同じ対応がある（`tools/portal/portal.py` の `COMFYUI_API_WORKFLOWS`）。
+
+### 実機試験の結果（2026-11-25、`run_workflow.py run --monitor`。ComfyUI だけが GPU を使う状態）
+
+| 試験 | 秒数（サーバー側） | VRAM の最大（nvidia-smi の機体全体） | 出力 | アルファ |
+|---|---|---|---|---|
+| Wan Alpha 832x480・81 コマ・4 ステップ・cfg 1.0・seed 42（重みの初回読み込みを含む） | 121.3 | 21447 MiB | RGBA の PNG 81 枚（832x480）と RGBA のアニメ WebP 1 本（81 コマ） | 4 チャンネル。81 枚の平均で 36% の画素が 0、40% が 4 以下。1 枚目は縁の 99.8% が 0 だが、四隅は 0〜3（厳密な 0 でない画素が残る）。渦が縁まで広がるコマでは縁にもアルファが立つ |
+| LayerDiffuse 1024x1024・20 ステップ・cfg 7・seed 42 | 9.8 | 8305 MiB | RGBA の PNG 1 枚 | 76% の画素が 0、縁は全部 0 |
+| 同 seed 7 | 約 7 | 8305 MiB | 同上 | 50% が 0、四隅 0 |
+
+- RAM（cgroup のピーク）は Wan 4.6 GiB、LayerDiffuse 2.4 GiB。swap は使わなかった。
+- LayerDiffuse の seed 42 は「orange」でも緑がかった白の光になった（透過なしの VAE デコードも同じ色なので、デコードではなく生成の結果）。
+  seed 7 では橙の火花になった。色はシードで大きく変わる。
+
 ## ライセンス
 
 ComfyUI は GPL-3.0。Mstafa-awad のノードは GPL-3.0 か MIT、WTiVo は GPL-3.0-or-later（CGAL を GPL で使う）。
 ワークフローと配布元インストーラは MIT。重みはそれぞれの配布元の条件に従う（商用に使うなら個別に確かめること）。
 動画生成: ComfyUI-GGUF は Apache-2.0、Kandinsky 6.0 の拡張と重みは MIT（音声 VAE の MMAudio `v1-44.pth` は CC BY-NC 4.0）、
 HunyuanVideo 1.5 は Tencent Hunyuan Community License（EU・英国・韓国を対象地域から除く）、LTX 2.5 は LTX-2 Community License。
+ゲームのエフェクト（2026-11-25 に Hugging Face のモデルのページで確認）: Comfy-Org/Wan_2.1_ComfyUI_repackaged（Wan 2.1 T2V 14B fp8・umt5・
+Wan-Alpha の VAE / LoRA）は Apache-2.0（LICENSE のファイルは無い。元の Wan-AI/Wan2.1-T2V-14B と htdong/Wan-Alpha も Apache-2.0）。
+Kijai/WanVideo_comfy（LightX2V の LoRA）は License の欄が無い（元の lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill は Apache-2.0、LICENSE.txt あり）。
+LayerDiffusion/layerdiffusion-v1 は CreativeML OpenRAIL-M（LICENSE のファイルは無い）、SDXL base 1.0 は CreativeML Open RAIL++-M（LICENSE.md）、
+ComfyUI-layerdiffuse は Apache-2.0。

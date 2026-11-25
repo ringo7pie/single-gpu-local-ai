@@ -1,0 +1,22 @@
+localai による変更（2026-11-25 作成）。この差分は上流のファイルの行を含む派生物で、上流と同じライセンスに従う。
+Modification notice: this patch changes layered_diffusion.py of https://github.com/huchenlei/ComfyUI-layerdiffuse (commit b4f6a9e024064a4489f774a8b91049ce0b606ea3).
+SPDX-License-Identifier: Apache-2.0
+License text: tools/comfyui/patches/LICENSES/Apache-2.0.txt (see LICENSE-NOTICE.md)
+
+diff --git a/layered_diffusion.py b/layered_diffusion.py
+index 5ffc79b..659c785 100644
+--- a/layered_diffusion.py
++++ b/layered_diffusion.py
+@@ -129,7 +129,11 @@ class LayeredDiffusionDecodeRGBA(LayeredDiffusionDecode):
+     def decode(self, samples, images, sd_version: str, sub_batch_size: int):
+         image, mask = super().decode(samples, images, sd_version, sub_batch_size)
+         alpha = 1.0 - mask
+-        return JoinImageWithAlpha().join_image_with_alpha(image, alpha)
++        # localai: ComfyUI v0.41 の JoinImageWithAlpha は V3 のノード（classmethod の execute）で、
++        # join_image_with_alpha が無い。新旧どちらでも動くように呼び分ける。
++        if hasattr(JoinImageWithAlpha, "join_image_with_alpha"):
++            return JoinImageWithAlpha().join_image_with_alpha(image, alpha)
++        return JoinImageWithAlpha.execute(image, alpha).result
+ 
+ 
+ class LayeredDiffusionDecodeSplit(LayeredDiffusionDecodeRGBA):

@@ -777,7 +777,8 @@
     "comfyui": {
       description: "1 枚の画像から水密（watertight）メッシュや低ポリのゲーム用アセットを作る、" +
         "PixelArtistry のワークフロー（ノードをつないで生成する UI）。" +
-        "文章・画像から動画を作る HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast のワークフローも入っている（左の Workflows → Video）",
+        "文章・画像から動画を作る HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast のワークフローも入っている（左の Workflows → Video）。" +
+        "ゲームのエフェクト用に、透明度つきの動画（Wan 2.1 Alpha）と透明な 1 枚絵（LayerDiffuse + SDXL）も作れる（Workflows → VFX）",
       stoppedReason: "起動していません。下のボタンから起動できます。",
       startingReason: "起動処理中です。まもなく利用できるようになります。",
       note: "GPU の排他: Hunyuan3D・Pixal3D・音楽・効果音生成・Stable Audio・音声合成・Strata（Coder 版・公式版・公式版 IQ3_S・Swift 1.5 を含む）とは同時に使えません。起動すると、動いているほうは自動で停止します。"
@@ -791,6 +792,11 @@
         {
           href: "/guides/video-generation.html",
           label: "使い方（動画生成: HunyuanVideo 1.5 / Kandinsky 6.0 Lite / LTX 2.5 Fast）→",
+          tooltip: TOOLTIPS.openGuideLink
+        },
+        {
+          href: "/guides/vfx.html",
+          label: "使い方（ゲームのエフェクト: Wan 2.1 Alpha / LayerDiffuse、他の PC から API で使う）→",
           tooltip: TOOLTIPS.openGuideLink
         }
       ]

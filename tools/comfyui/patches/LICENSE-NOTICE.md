@@ -11,6 +11,7 @@
 | `wtivo-src-core-vertices-lifetime.patch` | [Mstafa-awad/WTiVo-WatertightVoxel](https://github.com/Mstafa-awad/WTiVo-WatertightVoxel) `7a0ac7cb` | `native/core/wtivo_core.cpp` | Apache-2.0 | `LICENSES/Apache-2.0.txt` |
 | `wtivo-src-linux-build.patch` | 同上 | `CMakeLists.txt`、`scripts/build_gpupr.py` | GPL-3.0-or-later | `LICENSES/GPL-3.0-or-later.txt` |
 | `cumesh-eigen-include.patch` | [visualbruno/CuMesh](https://github.com/visualbruno/CuMesh) `d10e54c3`（元は Jianfeng Xiang の CuMesh） | `setup.py` | MIT（Copyright (c) 2025 Jianfeng XIANG） | `LICENSES/MIT-CuMesh.txt` |
+| `layerdiffuse-join-alpha-v3.patch` | [huchenlei/ComfyUI-layerdiffuse](https://github.com/huchenlei/ComfyUI-layerdiffuse) `b4f6a9e0` | `layered_diffusion.py` | Apache-2.0（リポジトリの LICENSE） | `LICENSES/Apache-2.0.txt` |
 
 ## 守っていること
 

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ゲームのエフェクトの使い方（Wan 2.1 Alpha / LayerDiffuse）— ローカル AI サーバー</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --text: #1c1f24;
+    --muted: #5a6270;
+    --border: #d8dce2;
+    --accent: #2f6f4f;
+    --accent-fg: #ffffff;
+    --warn-bg: #fdf1d6;
+    --warn-text: #7a5b00;
+    --info-bg: #e4f0ea;
+    --info-text: #1f4d36;
+    --code-bg: #eef0f3;
+    --head-bg: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1d2025;
+      --text: #e7e9ec;
+      --muted: #9aa1ac;
+      --border: #33373f;
+      --accent: #4fae7c;
+      --accent-fg: #0d140f;
+      --warn-bg: #3a2f10;
+      --warn-text: #f0d48a;
+      --info-bg: #17301f;
+      --info-text: #bfe5cf;
+      --code-bg: #262a31;
+      --head-bg: #23272d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    line-height: 1.7;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 20px 64px; }
+  header.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 8px;
+  }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .head-links { display: flex; gap: 10px; flex-wrap: wrap; }
+  .head-links a {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .head-links a.primary { background: var(--accent); color: var(--accent-fg); }
+  .lead { color: var(--muted); margin: 8px 0 0; }
+  nav.toc {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 18px;
+    margin: 20px 0;
+  }
+  nav.toc ol { margin: 4px 0; padding-left: 1.4em; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 22px 16px;
+    margin: 18px 0;
+  }
+  h2 { font-size: 1.2rem; margin: 18px 0 8px; }
+  h3 { font-size: 1.02rem; margin: 18px 0 6px; }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 0.92rem; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: var(--head-bg); font-weight: 600; }
+  td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+  code, kbd {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  .callout { border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 0.93rem; }
+  .callout.warn { background: var(--warn-bg); color: var(--warn-text); }
+  .callout.info { background: var(--info-bg); color: var(--info-text); }
+  .callout p { margin: 4px 0; }
+  ol.steps > li { margin: 4px 0; }
+  .muted { color: var(--muted); font-size: 0.88rem; }
+  .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0 7px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="page-head">
+    <h1>ゲームのエフェクトの使い方（Wan 2.1 Alpha / LayerDiffuse）</h1>
+    <div class="head-links">
+      <a href="/">← 入口ページ</a>
+      <a class="primary" id="comfyui-link" href="#" target="_blank" rel="noopener noreferrer">ComfyUI を開く（ポート 8188）→</a>
+    </div>
+  </header>
+  <p class="lead">ComfyUI で、半透明の動く素材（透明度つきの動画）と透明な 1 枚絵を作る。画面では左の Workflows → <code>VFX</code>。
+    他の PC からは、この入口ページの API で ComfyUI を起動し、ComfyUI の HTTP API（ポート 8188）でワークフローを投げる。</p>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#workflows">ワークフロー</a></li>
+      <li><a href="#api">他の PC から API で使う</a></li>
+      <li><a href="#inputs">API 形式の入力の対応</a></li>
+      <li><a href="#measured">この機体での実測</a></li>
+      <li><a href="#license">ライセンス</a></li>
+    </ol>
+  </nav>
+
+  <section id="workflows">
+    <h2>ワークフロー</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>名前（workflows/ の下）</th><th>作るもの</th><th>既定の値</th></tr>
+      <tr><td><code>VFX/WanAlpha_T2V.json</code><br><code>VFX/WanAlpha_T2V_api.json</code></td>
+        <td>Wan 2.1 Alpha T2V 14B。透明度つきの動画。RGBA の PNG の連番と、RGBA のアニメ WebP の 2 つを書く</td>
+        <td>832x480・81 コマ（16 fps で約 5 秒）・LightX2V で 4 ステップ・cfg 1.0・seed 42</td></tr>
+      <tr><td><code>VFX/LayerDiffuse_SDXL_RGBA.json</code><br><code>VFX/LayerDiffuse_SDXL_RGBA_api.json</code></td>
+        <td>LayerDiffuse（SDXL base 1.0）。透明な 1 枚絵（RGBA の PNG）</td>
+        <td>1024x1024・20 ステップ・cfg 7・seed 42。幅と高さは 64 の倍数</td></tr>
+    </table>
+    </div>
+    <p>出力は ComfyUI の <code>output/dq_vfx_trial/</code> の下（<code>wan_alpha_png_*.png</code>・<code>wan_alpha_*.webp</code>・<code>layerdiffuse_*.png</code>）。
+      <code>_api.json</code> は画面の Save (API Format) と同じ形（POST /prompt の <code>prompt</code>）。</p>
+    <div class="callout info"><p>GPU は 1 枚を取り合う。ComfyUI を起動すると、Strata・Hunyuan3D・音楽生成などほかの GPU のサービスは止まる。
+      Wan Alpha は VRAM を 21 GiB ほど使う。</p></div>
+  </section>
+
+  <section id="api">
+    <h2>他の PC から API で使う</h2>
+    <p>サーバーの名前は、このページを開いたホスト（<code id="host-name">&lt;server&gt;</code>）。POST には <code>X-Portal-Request: 1</code> が要る。</p>
+    <ol class="steps">
+      <li>入口ページの API で ComfyUI を起動し、使えるまで待つ:<br>
+        <code>curl -X POST -H "X-Portal-Request: 1" --max-time 660 "http://&lt;server&gt;:8080/api/service/comfyui/start?wait=600"</code></li>
+      <li>API 形式のワークフローを読む（<code>/</code> は <code>%2F</code> に符号化する）:<br>
+        <code>curl "http://&lt;server&gt;:8188/api/userdata/workflows%2FVFX%2FWanAlpha_T2V_api.json" -o wan.json</code></li>
+      <li>下の表の入力を書き換え、<code>{"prompt": &lt;wan.json の中身&gt;, "client_id": "任意"}</code> を <code>POST http://&lt;server&gt;:8188/prompt</code> に送る。応答の <code>prompt_id</code> を控える。</li>
+      <li><code>GET /history/&lt;prompt_id&gt;</code> を数秒ごとに見る。終わると <code>outputs</code> にファイル名（<code>filename</code>・<code>subfolder</code>・<code>type</code>）が入る。</li>
+      <li><code>GET /view?filename=&lt;名前&gt;&amp;subfolder=dq_vfx_trial&amp;type=output</code> で取る。</li>
+    </ol>
+    <p>API の一覧（エンドポイント・入力の対応）は <a id="api-link" href="/api">入口ページの <code>GET /api</code></a> の <code>comfyui</code> にもある。
+      Claude Code / Codex からは MCP の <code>localai_comfyui</code> に <code>workflow_name: "VFX/WanAlpha_T2V_api.json"</code> と
+      <code>set: {"6.text": "…", "3.seed": 1}</code> を渡すと、投入から出力の保存まで行う（<code>tools/localai-mcp</code>）。</p>
+  </section>
+
+  <section id="inputs">
+    <h2>API 形式の入力の対応（<code>&lt;ノード id&gt;.&lt;入力名&gt;</code>）</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>何を</th><th>VFX/WanAlpha_T2V_api.json</th><th>VFX/LayerDiffuse_SDXL_RGBA_api.json</th></tr>
+      <tr><td>プロンプト</td><td><code>6.text</code></td><td><code>6.text</code></td></tr>
+      <tr><td>否定のプロンプト</td><td><code>7.text</code></td><td><code>7.text</code></td></tr>
+      <tr><td>シード</td><td><code>3.seed</code></td><td><code>3.seed</code></td></tr>
+      <tr><td>ステップ・cfg</td><td><code>3.steps</code>・<code>3.cfg</code></td><td><code>3.steps</code>・<code>3.cfg</code></td></tr>
+      <tr><td>幅・高さ</td><td><code>40.width</code>・<code>40.height</code></td><td><code>5.width</code>・<code>5.height</code></td></tr>
+      <tr><td>コマ数</td><td><code>40.length</code>（4 の倍数 + 1）</td><td>—</td></tr>
+      <tr><td>保存の接頭辞</td><td><code>93.filename_prefix</code>（PNG の連番）・<code>80.filename_prefix</code>（アニメ WebP。<code>80.fps</code>）</td><td><code>27.filename_prefix</code></td></tr>
+    </table>
+    </div>
+  </section>
+
+  <section id="measured">
+    <h2>この機体での実測（2026-11-25、A30 24 GB、ComfyUI だけが GPU を使う状態）</h2>
+    <div class="table-wrap">
+    <table>
+      <tr><th>試験</th><th>秒数</th><th>VRAM の最大</th><th>アルファ</th></tr>
+      <tr><td>Wan Alpha 832x480・81 コマ・4 ステップ</td><td class="num">121</td><td class="num">21447 MiB</td><td>RGBA。背景はほぼ 0 だが、四隅などに 1〜3 の画素が残る</td></tr>
+      <tr><td>LayerDiffuse 1024x1024・20 ステップ</td><td class="num">7〜10</td><td class="num">8305 MiB</td><td>RGBA。縁は 0</td></tr>
+    </table>
+    </div>
+    <p class="muted">色はシードで大きく変わる（seed 42 の「orange」の火花は緑がかった白、seed 7 は橙になった）。</p>
+  </section>
+
+  <section id="license">
+    <h2>ライセンス（Hugging Face のモデルのページの記載）</h2>
+    <ul>
+      <li>Wan 2.1 T2V 14B・umt5・Wan-Alpha の VAE / LoRA（Comfy-Org/Wan_2.1_ComfyUI_repackaged）: Apache-2.0</li>
+      <li>LightX2V の LoRA（Kijai/WanVideo_comfy）: 記載なし。元の lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill は Apache-2.0</li>
+      <li>LayerDiffusion の重み: CreativeML OpenRAIL-M。SDXL base 1.0: CreativeML Open RAIL++-M。ComfyUI-layerdiffuse: Apache-2.0</li>
+    </ul>
+  </section>
+</main>
+<script>
+  // リンクと例は、このページを開いたホスト名から作る（サーバーの IP を書かない）。
+  (function () {
+    const link = document.getElementById("comfyui-link");
+    link.href = location.protocol + "//" + location.hostname + ":8188/";
+    document.getElementById("host-name").textContent = location.hostname || "<server>";
+  })();
+</script>
+</body>
+</html>

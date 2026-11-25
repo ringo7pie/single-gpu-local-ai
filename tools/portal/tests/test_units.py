@@ -3039,11 +3039,20 @@ def test_video_guide_builds_comfyui_link_from_hostname():
     assert ":8188" in html_text
 
 
+def test_vfx_guide_builds_links_from_hostname_and_matches_api_catalog():
+    html_text = (GUIDES_DIR / "vfx.html").read_text(encoding="utf-8")
+    assert "location.hostname" in html_text and ":8188" in html_text
+    for workflow in portal.COMFYUI_API_WORKFLOWS:
+        assert workflow["name"] in html_text
+        for target in workflow["inputs"].values():
+            assert target in html_text, target
+
+
 def test_comfyui_card_links_both_guides():
     html_text = _html_text()
     comfyui_block = html_text[html_text.index('"comfyui": {'):html_text.index('"audiocraft": {', html_text.index('"comfyui": {'))]
     hrefs = re.findall(r'href:\s*"(/guides/[^"]+)"', comfyui_block)
-    assert hrefs == ["/guides/pixelartistry.html", "/guides/video-generation.html"]
+    assert hrefs == ["/guides/pixelartistry.html", "/guides/video-generation.html", "/guides/vfx.html"]
     assert "meta.guides" in html_text
 
 
@@ -3097,3 +3106,340 @@ def test_index_html_stable_audio_card_glossary_and_lists():
         assert '"stable-audio"' in line, name
     genres_line = next(line for line in html.splitlines() if 'id: "audio"' in line)
     assert '"stable-audio"' in genres_line
+
+
+# ---------------------------------------------------------------------------
+# GET /api（API の一覧）・?wait=<秒>・Ollama のモデル操作（2026-11-25 追加）
+# ---------------------------------------------------------------------------
+
+def test_split_path_and_query():
+    assert portal.split_path_and_query("/api/service/strata/start?wait=60") == (
+        "/api/service/strata/start", {"wait": "60"}
+    )
+    assert portal.split_path_and_query("/api/status") == ("/api/status", {})
+
+
+def test_parse_wait_seconds():
+    assert portal.parse_wait_seconds(None) == (None, None)
+    assert portal.parse_wait_seconds("0") == (0, None)
+    assert portal.parse_wait_seconds(str(portal.WAIT_MAX_SEC)) == (portal.WAIT_MAX_SEC, None)
+    for bad in ("-1", "abc", "1.5", str(portal.WAIT_MAX_SEC + 1)):
+        value, error = portal.parse_wait_seconds(bad)
+        assert value is None and error
+
+
+def test_parse_keep_alive():
+    assert portal.parse_keep_alive(None) == (None, None)
+    assert portal.parse_keep_alive("300") == (300, None)
+    assert portal.parse_keep_alive("-1") == (-1, None)
+    assert portal.parse_keep_alive("30m") == ("30m", None)
+    for bad in ("0", "abc", "1d", "30 m", "-5"):
+        value, error = portal.parse_keep_alive(bad)
+        assert value is None and error
+
+
+def test_parse_ollama_action_path_handles_colon_slash_and_percent():
+    assert portal.parse_ollama_action_path("/api/ollama/qwen3.8:27b/load") == ("qwen3.8:27b", "load")
+    assert portal.parse_ollama_action_path("/api/ollama/qwen3.8%3A27b/unload") == ("qwen3.8:27b", "unload")
+    assert portal.parse_ollama_action_path("/api/ollama/hf.co/owner/name:Q4/load") == ("hf.co/owner/name:Q4", "load")
+    assert portal.parse_ollama_action_path("/api/ollama/load") is None
+    assert portal.parse_ollama_action_path("/api/ollama//load") is None
+    assert portal.parse_ollama_action_path("/api/ollama/a%20b/load") is None
+
+
+def test_parse_ollama_tags_and_resolve_installed_model():
+    payload = {"models": [{"name": "qwen3.8:27b"}, {"model": "gemma4:e4b"}, {"name": "qwen3.8:27b"}, "x", {}]}
+    installed = portal.parse_ollama_tags(payload)
+    assert installed == ["qwen3.8:27b", "gemma4:e4b"]
+    assert portal.parse_ollama_tags({}) == []
+    assert portal.resolve_installed_model("qwen3.8:27b", installed) == "qwen3.8:27b"
+    assert portal.resolve_installed_model("nosuch:1b", installed) is None
+    assert portal.resolve_installed_model("qwen3.8", ["qwen3.8:latest"]) == "qwen3.8:latest"
+
+
+def test_build_ollama_load_body():
+    assert json.loads(portal.build_ollama_load_body("qwen3.8:27b", None)) == {"model": "qwen3.8:27b"}
+    assert json.loads(portal.build_ollama_load_body("qwen3.8:27b", "30m")) == {"model": "qwen3.8:27b", "keep_alive": "30m"}
+    # prompt を付けない（生成させずに載せるだけ）
+    assert "prompt" not in json.loads(portal.build_ollama_load_body("x", -1))
+
+
+def test_host_name_from_header():
+    assert portal.host_name_from_header("192.168.1.10:8080") == "192.168.1.10"
+    assert portal.host_name_from_header("server") == "server"
+    assert portal.host_name_from_header(None) == "<server-ip>"
+    assert portal.host_name_from_header("[::1]:8080") == "[::1]"
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def test_wait_until_ready_returns_when_running():
+    clock = _FakeClock()
+    states = iter(["stopped", "starting", "starting", "running"])
+    result = portal.wait_until_ready(
+        {"name": "x", "unit": "x"}, 60, state_reader=lambda service: next(states), clock=clock, sleep=clock.sleep
+    )
+    assert result["ready"] is True and result["failed"] is False and result["state"] == "running"
+    assert result["waited_sec"] == 3 * portal.WAIT_POLL_SEC
+
+
+def test_wait_until_ready_times_out_while_starting():
+    clock = _FakeClock()
+    result = portal.wait_until_ready(
+        {"name": "x", "unit": "x"}, 7, state_reader=lambda service: "starting", clock=clock, sleep=clock.sleep
+    )
+    assert result == {"ready": False, "failed": False, "state": "starting", "waited_sec": 7.0}
+
+
+def test_wait_until_ready_detects_failure_after_grace_only():
+    clock = _FakeClock()
+    result = portal.wait_until_ready(
+        {"name": "x", "unit": "x"}, 60, state_reader=lambda service: "stopped", clock=clock, sleep=clock.sleep
+    )
+    # 起動直後の stopped は失敗とみなさず、grace を過ぎてから失敗にする
+    assert result["failed"] is True and result["ready"] is False
+    assert result["waited_sec"] >= portal.START_FAILURE_GRACE_SEC
+
+
+def test_build_api_catalog_lists_every_service_and_endpoint():
+    catalog = portal.build_api_catalog("192.168.1.10", 8080)
+    assert catalog["base_url"] == "http://192.168.1.10:8080"
+    assert [service["key"] for service in catalog["services"]] == [service["key"] for service in portal.SERVICES]
+    by_key = {service["key"]: service for service in catalog["services"]}
+    assert by_key["strata"]["url"] == "http://192.168.1.10:8082/"
+    assert by_key["strata"]["gpu_exclusive"] is True
+    assert by_key["strata"]["unloads_ollama_before_start"] is True
+    assert by_key["open-webui"]["gpu_exclusive"] is False
+    assert by_key["hunyuan3d"]["options"] == ["low-vram"]
+    paths = {(endpoint["method"], endpoint["path"]) for endpoint in catalog["endpoints"]}
+    for expected in [
+        ("GET", "/api/status"),
+        ("POST", "/api/service/<key>/start"),
+        ("GET", "/api/ollama"),
+        ("POST", "/api/ollama/<model>/load"),
+        ("POST", "/api/ollama/<model>/unload"),
+    ]:
+        assert expected in paths
+    assert catalog["required_header"]["name"] == "X-Portal-Request"
+
+
+def test_get_api_returns_catalog_with_host_from_header(running_server):
+    host, port = running_server.server_address
+    response, body = _request(running_server, "GET", "/api", headers={"Host": f"192.168.1.10:{port}"})
+    assert response.status == 200
+    payload = json.loads(body)
+    assert payload["base_url"] == f"http://192.168.1.10:{port}"
+    assert len(payload["services"]) == len(portal.SERVICES)
+
+
+def _fake_systemctl(monkeypatch, calls):
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(args, capture_output, text, timeout):
+        calls.append(args)
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(portal.subprocess, "run", fake_run)
+
+
+def test_post_start_with_wait_reports_ready(running_server, monkeypatch):
+    calls = []
+    _fake_systemctl(monkeypatch, calls)
+    monkeypatch.setattr(portal, "read_unit_state", lambda unit: ("inactive", "loaded"))
+    monkeypatch.setattr(portal, "port_is_open", lambda port, host="127.0.0.1", timeout=0.3: False)
+    monkeypatch.setattr(
+        portal, "wait_until_ready",
+        lambda service, wait_sec: {"ready": True, "failed": False, "state": "running", "waited_sec": 42.0},
+    )
+    response, body = _request(running_server, "POST", "/api/service/open-webui/start?wait=120")
+    assert response.status == 200
+    payload = json.loads(body)
+    assert payload["ok"] is True and payload["ready"] is True and payload["waited_sec"] == 42.0
+    assert payload["state"] == "running"
+    assert ["systemctl", "--user", "start", "--no-block", "open-webui"] in calls
+
+
+def test_post_start_with_wait_reports_failure(running_server, monkeypatch):
+    _fake_systemctl(monkeypatch, [])
+    monkeypatch.setattr(portal, "read_unit_state", lambda unit: ("inactive", "loaded"))
+    monkeypatch.setattr(portal, "port_is_open", lambda port, host="127.0.0.1", timeout=0.3: False)
+    monkeypatch.setattr(
+        portal, "wait_until_ready",
+        lambda service, wait_sec: {"ready": False, "failed": True, "state": "stopped", "waited_sec": 12.0},
+    )
+    response, body = _request(running_server, "POST", "/api/service/open-webui/start?wait=120")
+    payload = json.loads(body)
+    assert payload["ok"] is False and payload["ready"] is False
+    assert "journalctl" in payload["message"]
+
+
+def test_post_start_with_invalid_wait_returns_400_without_systemctl(running_server, monkeypatch):
+    calls = []
+    _fake_systemctl(monkeypatch, calls)
+    response, body = _request(running_server, "POST", "/api/service/open-webui/start?wait=abc")
+    assert response.status == 400
+    assert not [call for call in calls if "start" in call]
+
+
+def test_post_start_without_wait_has_no_ready_field(running_server, monkeypatch):
+    _fake_systemctl(monkeypatch, [])
+    monkeypatch.setattr(portal, "read_unit_state", lambda unit: ("inactive", "loaded"))
+    monkeypatch.setattr(portal, "port_is_open", lambda port, host="127.0.0.1", timeout=0.3: False)
+    monkeypatch.setattr(portal, "wait_until_ready", lambda *args, **kwargs: pytest.fail("待ってはいけない"))
+    response, body = _request(running_server, "POST", "/api/service/open-webui/start")
+    assert "ready" not in json.loads(body)
+
+
+@pytest.fixture()
+def fake_ollama_models(monkeypatch):
+    """Ollama の HTTP には触れない。入っているモデル・載っているモデル・読み込みの呼び出しを差し替える。"""
+    state = {"installed": ["qwen3.8:27b", "gemma4:e4b"], "loaded": [], "load_calls": [], "load_result": (True, "")}
+    monkeypatch.setattr(portal, "read_ollama_tags", lambda timeout=portal.OLLAMA_TIMEOUT_SEC: state["installed"])
+    monkeypatch.setattr(portal, "read_ollama_ps", lambda timeout=portal.OLLAMA_TIMEOUT_SEC: state["loaded"])
+
+    def fake_load(model_name, keep_alive, timeout=portal.OLLAMA_LOAD_TIMEOUT_SEC):
+        state["load_calls"].append((model_name, keep_alive))
+        if state["load_result"][0]:
+            state["loaded"] = [{"name": model_name, "size_vram_mib": 22201}]
+        return state["load_result"]
+
+    monkeypatch.setattr(portal, "request_ollama_load", fake_load)
+    return state
+
+
+def test_get_api_ollama_lists_installed_and_loaded(running_server, fake_ollama_models):
+    fake_ollama_models["loaded"] = [{"name": "qwen3.8:27b", "size_vram_mib": 22201}]
+    response, body = _request(running_server, "GET", "/api/ollama")
+    assert response.status == 200
+    payload = json.loads(body)
+    assert payload == {
+        "reachable": True,
+        "installed": ["qwen3.8:27b", "gemma4:e4b"],
+        "loaded": [{"name": "qwen3.8:27b", "size_vram_mib": 22201}],
+    }
+
+
+def test_post_ollama_load_stops_gpu_exclusive_services_first(running_server, fake_ollama_models, monkeypatch):
+    calls = []
+    _fake_systemctl(monkeypatch, calls)
+    # Strata（8082）だけが動いている
+    monkeypatch.setattr(portal, "read_unit_state", lambda unit: ("active", "loaded") if unit == "strata" else ("inactive", "loaded"))
+    monkeypatch.setattr(portal, "port_is_open", lambda port, host="127.0.0.1", timeout=0.3: port == 8082)
+    response, body = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/load?keep_alive=30m")
+    assert response.status == 200
+    payload = json.loads(body)
+    assert payload["ok"] is True
+    assert payload["stopped"] == ["strata"]
+    assert payload["size_vram_mib"] == 22201
+    assert ["systemctl", "--user", "stop", "strata"] in calls
+    # Open WebUI は GPU の排他グループではないので止めない
+    assert ["systemctl", "--user", "stop", "open-webui"] not in calls
+    assert fake_ollama_models["load_calls"] == [("qwen3.8:27b", "30m")]
+
+
+def test_post_ollama_load_aborts_when_stop_fails(running_server, fake_ollama_models, monkeypatch):
+    class FailedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "拒否"
+
+    monkeypatch.setattr(portal.subprocess, "run", lambda *args, **kwargs: FailedProcess())
+    monkeypatch.setattr(portal, "read_unit_state", lambda unit: ("active", "loaded") if unit == "comfyui" else ("inactive", "loaded"))
+    monkeypatch.setattr(portal, "port_is_open", lambda port, host="127.0.0.1", timeout=0.3: port == 8188)
+    response, body = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/load")
+    payload = json.loads(body)
+    assert payload["ok"] is False
+    assert fake_ollama_models["load_calls"] == []
+
+
+def test_post_ollama_load_unknown_model_returns_404(running_server, fake_ollama_models):
+    response, body = _request(running_server, "POST", "/api/ollama/nosuch:1b/load")
+    assert response.status == 404
+    payload = json.loads(body)
+    assert payload["installed"] == ["qwen3.8:27b", "gemma4:e4b"]
+    assert fake_ollama_models["load_calls"] == []
+
+
+def test_post_ollama_requires_header(running_server, fake_ollama_models):
+    response, _ = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/load", headers={})
+    assert response.status == 403
+    assert fake_ollama_models["load_calls"] == []
+
+
+def test_post_ollama_invalid_action_and_keep_alive_return_400(running_server, fake_ollama_models):
+    response, _ = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/pull")
+    assert response.status == 400
+    response, _ = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/load?keep_alive=0")
+    assert response.status == 400
+    assert fake_ollama_models["load_calls"] == []
+
+
+def test_post_ollama_returns_503_when_unreachable(running_server, fake_ollama_models, monkeypatch):
+    monkeypatch.setattr(portal, "read_ollama_tags", lambda timeout=portal.OLLAMA_TIMEOUT_SEC: None)
+    response, _ = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/load")
+    assert response.status == 503
+
+
+def test_post_ollama_unload(running_server, fake_ollama_models):
+    response, body = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/unload")
+    assert json.loads(body)["ok"] is True and running_server.unload_calls == []  # 載っていなければ何もしない
+    fake_ollama_models["loaded"] = [{"name": "qwen3.8:27b", "size_vram_mib": 22201}]
+    response, body = _request(running_server, "POST", "/api/ollama/qwen3.8:27b/unload")
+    assert json.loads(body)["ok"] is True
+    assert running_server.unload_calls == ["qwen3.8:27b"]
+
+
+def test_get_ollama_action_path_returns_405(running_server):
+    response, _ = _request(running_server, "GET", "/api/ollama/qwen3.8:27b/load")
+    assert response.status == 405
+
+
+def test_request_ollama_load_posts_model_without_prompt(fake_ollama):
+    assert portal.request_ollama_load("qwen3.8:27b", "30m", timeout=5) == (True, "")
+    assert fake_ollama.received == [
+        {
+            "path": "/api/generate",
+            "content_type": "application/json",
+            "body": {"model": "qwen3.8:27b", "keep_alive": "30m"},
+        }
+    ]
+
+
+def test_request_ollama_load_reports_http_error(fake_ollama):
+    fake_ollama.response_status = 404
+    loaded_ok, error_text = portal.request_ollama_load("qwen3.8:27b", None, timeout=5)
+    assert loaded_ok is False and "404" in error_text
+
+
+def test_read_ollama_tags_returns_none_when_unreachable(monkeypatch):
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    closed_port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setattr(portal, "OLLAMA_TAGS_URL", f"http://127.0.0.1:{closed_port}/api/tags")
+    assert portal.read_ollama_tags(timeout=2) is None
+
+
+def test_build_api_catalog_lists_comfyui_workflows():
+    catalog = portal.build_api_catalog("192.168.1.10", 8080)
+    comfyui = catalog["comfyui"]
+    assert comfyui["base_url"] == "http://192.168.1.10:8188"
+    names = [workflow["name"] for workflow in comfyui["workflows"]]
+    assert names == ["VFX/WanAlpha_T2V_api.json", "VFX/LayerDiffuse_SDXL_RGBA_api.json"]
+    assert comfyui["workflows"][0]["url"] == "http://192.168.1.10:8188/api/userdata/workflows%2FVFX%2FWanAlpha_T2V_api.json"
+    for workflow in comfyui["workflows"]:
+        for target in workflow["inputs"].values():
+            node_id, _, input_name = target.partition(".")
+            assert node_id.isdigit() and input_name

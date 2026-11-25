@@ -49,6 +49,7 @@ Trellis2-Mesh-Encoder https://github.com/Mstafa-awad/Trellis2-Mesh-Encoder.git 8
 ComfyUI_LODsmith_Merge_Watertight https://github.com/Mstafa-awad/ComfyUI_LODsmith_Merge_Watertight.git 5da6dd69c02d0f3d4ae743d090cfac79aefe7f96
 WTiVo-FastMergeByDistance https://github.com/Mstafa-awad/WTiVo-FastMergeByDistance.git 5392949165ceed1e74448b1949d6e0dc9b34dd92
 ComfyUI-GGUF https://github.com/city96/ComfyUI-GGUF.git 6ea2651e7df66d7585f6ffee804b20e92fb38b8a
+ComfyUI-layerdiffuse https://github.com/huchenlei/ComfyUI-layerdiffuse.git b4f6a9e024064a4489f774a8b91049ce0b606ea3
 "
 
 # torch / torchvision / torchaudio は cu126 の index から入れる（requirements.lock.txt には書かない）。
@@ -72,6 +73,8 @@ usage() {
   --skip-models          重みの取得を省略する（あとで run-comfyui fetch-models を手で実行する）
   --video                動画生成の重み（HunyuanVideo 1.5 / LTX 2.5 Fast / Kandinsky 6.0 Lite、約 111 GiB）も取る
                          （run-comfyui fetch-models --video と同じ。--skip-models が優先）
+  --vfx                  ゲームのエフェクトの重み（Wan 2.1 Alpha・LayerDiffuse と SDXL base 1.0、約 32 GiB）も取る
+                         （run-comfyui fetch-models --vfx と同じ。--skip-models が優先）
   --build-only           venv・上流取得・torch・依存・CUDA 拡張・WTiVo・自前パッケージ（cfui）までで止める。
                          重みの取得・ワークフローの書き出し・systemd ユニットの配置・doctor は行わない
   --fallback-workflows   予備案（WTiVo を外したもの）の写しも書き出す。WTiVo が使えないときは
@@ -84,6 +87,7 @@ EOF
 
 SKIP_MODELS=false
 VIDEO_MODELS=false
+VFX_MODELS=false
 BUILD_ONLY=false
 FALLBACK_WORKFLOWS=false
 while [ $# -gt 0 ]
@@ -95,6 +99,10 @@ do
       ;;
     --video)
       VIDEO_MODELS=true
+      shift
+      ;;
+    --vfx)
+      VFX_MODELS=true
       shift
       ;;
     --build-only)
@@ -195,7 +203,7 @@ echo "  標準ノード（nodes_trellis2.py / nodes_mesh_postprocess.py）: 確�
 
 # ---------------------------------------------------------------- [4/12]
 echo
-echo "[4/12] custom_nodes（11 個、コミット固定）と Kandinsky 6.0 の拡張"
+echo "[4/12] custom_nodes（12 個、コミット固定）と Kandinsky 6.0 の拡張"
 while read -r node_name node_url node_commit
 do
   [ -n "$node_name" ] || continue
@@ -363,6 +371,9 @@ build_cuda_extensions() {
 echo
 echo "[7/12] CUDA 拡張（CuMesh / FlexGEMM / o-voxel / nvdiffrast。ソースからビルド、sm_80）"
 build_cuda_extensions
+# ComfyUI-layerdiffuse は ComfyUI v0.41 の JoinImageWithAlpha（V3 のノード）の旧い呼び方をしていて、
+# LayeredDiffusionDecodeRGBA が AttributeError で落ちる（2026-11-25 実測）。新旧どちらでも動くように直す。
+apply_patch "$NODES_DIR/ComfyUI-layerdiffuse" "$TOOL_DIR/patches/layerdiffuse-join-alpha-v3.patch"
 if "$VENV_DIR/bin/python" -c "import torch, cumesh, flex_gemm, o_voxel, nvdiffrast.torch" >/dev/null 2>&1; then
   echo "CUDA 拡張: 確認しました（すべて import できました）"
 else
@@ -441,12 +452,17 @@ else
     "$RUNNER" fetch-models
     echo "  動画生成の重みは取っていません（使うときは $RUNNER fetch-models --video）"
   fi
+  if $VFX_MODELS; then
+    "$RUNNER" fetch-models --skip-3d --vfx
+  else
+    echo "  ゲームのエフェクトの重みは取っていません（使うときは $RUNNER fetch-models --skip-3d --vfx）"
+  fi
   echo "重み取得: 完了しました"
 fi
 
 # ---------------------------------------------------------------- [11/12]
 echo
-echo "[11/12] PixelArtistry のワークフロー・画像 1 枚から 3D の入口 Image_to_3D（$PIXELARTISTRY_COMMIT）・動画生成の写し"
+echo "[11/12] PixelArtistry のワークフロー・画像 1 枚から 3D の入口 Image_to_3D（$PIXELARTISTRY_COMMIT）・動画生成と VFX の写し"
 fetch_pinned_repo "$PIXELARTISTRY_URL" "$PIXELARTISTRY_COMMIT" \
   "$VENDOR_DIR/PixelArtistry-Watertight-Meshes" "PixelArtistry-Watertight-Meshes"
 ADAPT_ARGS=()
@@ -457,6 +473,9 @@ fi
 "$VENV_DIR/bin/python" "$TOOL_DIR/scripts/adapt_workflows.py" "${ADAPT_ARGS[@]}"
 # 動画生成の写し（Workflows → Video）。土台は同梱テンプレートと Kandinsky 6.0 の拡張の example_workflows/。
 "$VENV_DIR/bin/python" "$TOOL_DIR/scripts/adapt_video_workflows.py"
+# ゲームのエフェクト（Workflows → VFX）の UI 形式の写し。API 形式（*_api.json）は ComfyUI の /object_info が要るので、
+# 起動後に scripts/adapt_vfx_workflows.py --api で書く（README の「ゲームのエフェクト」）。
+"$VENV_DIR/bin/python" "$TOOL_DIR/scripts/adapt_vfx_workflows.py"
 
 # ---------------------------------------------------------------- [12/12]
 echo

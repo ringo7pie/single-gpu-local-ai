@@ -35,6 +35,8 @@ rembg[cpu]
 # loguru・omegaconf は comfyui/ のコードからは読まれていない）。どれも既存の版を変えずに足せることを uv の --dry-run で確かめた。
 -r vendor/ComfyUI/custom_nodes/ComfyUI-GGUF/requirements.txt
 -r vendor/kandinsky-6/comfyui/requirements.txt
+# ゲームのエフェクト（2026-11-25）。huchenlei/ComfyUI-layerdiffuse（diffusers>=0.29.0・opencv-python）。
+-r vendor/ComfyUI/custom_nodes/ComfyUI-layerdiffuse/requirements.txt
 
 # ネイティブ拡張の実行時依存。拡張は --no-deps で入れるため、ここで補う。
 #   o_voxel: plyfile / zstandard / easydict / trimesh / tqdm（cv2 は上の opencv-python）

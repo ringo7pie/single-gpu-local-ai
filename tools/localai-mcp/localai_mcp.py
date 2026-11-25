@@ -10,7 +10,8 @@ PC のローカルファイルとして扱う。
     LOCALAI_PORTAL_PORT  入口ページのポート。既定 8080
     LOCALAI_OUTPUT_DIR   出力の保存先。既定は起動時の作業フォルダの localai-outputs/
 
-起動と停止は入口ページの API（GET /api/status、POST /api/service/<key>/<start|stop>）に任せる。GPU の排他
+起動と停止は入口ページの API（GET /api/status、POST /api/service/<key>/<start|stop>?wait=<秒>）に任せる。
+Ollama のモデルの読み込み・解放も入口ページ（GET /api/ollama、POST /api/ollama/<model>/<load|unload>）を通す。GPU の排他
 （ほかのサービスを止める）と Ollama のモデルを降ろす処理は入口ページが行う。この MCP は、それで他の人の作業を
 黙って止めないよう、止まるもの・降ろされるものがあるときは stop_others=true が無い限り起動しない。
 
@@ -36,7 +37,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 SERVER_NAME = "localai"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 DEFAULT_PORTAL_PORT = 8080
@@ -65,6 +66,12 @@ MESH_ENGINES: dict[str, dict[str, Any]] = {
 }
 
 HTTP_TIMEOUT_SHORT = 10.0
+# 入口ページの ?wait= の上限（portal.py の WAIT_MAX_SEC と同じ）。これを超える待ちは、残りを MCP 側の問い合わせで待つ。
+PORTAL_WAIT_MAX_SEC = 1800
+# HTTP の待ちは、入口ページが待つ秒数にこの余裕を足す。
+PORTAL_WAIT_MARGIN_SEC = 60.0
+# Ollama のモデルの読み込みの待ち（入口ページ側の上限 300 秒 + 停止の待ちの余裕）。
+OLLAMA_LOAD_HTTP_TIMEOUT_SEC = 600.0
 SERVICE_POLL_SEC = 5.0
 COMFY_POLL_SEC = 3.0
 RESULT_TEXT_LIMIT = 4000
@@ -323,6 +330,85 @@ def wait_for_state(key: str, wanted: str, timeout_sec: float) -> tuple[str, floa
         time.sleep(SERVICE_POLL_SEC)
 
 
+def is_old_portal_wait_error(response: HttpResponse) -> bool:
+    """?wait= を知らない古い入口ページの 400（`start?wait=…` を action とみなして断る）かどうか。"""
+    return response.status == 400 and "action は" in response.error_text()
+
+
+def running_gpu_services(status: dict[str, Any]) -> list[str]:
+    """GPU を排他的に使うサービスのうち、動いている（running / starting）ものの key（純粋関数）。"""
+    services = services_by_key(status)
+    return [key for key in GPU_EXCLUSIVE_KEYS if (services.get(key) or {}).get("state") in ("running", "starting")]
+
+
+def portal_ollama_json(response: HttpResponse) -> dict[str, Any]:
+    """入口ページの /api/ollama の応答を辞書にする。/api/ollama を持たない古い入口ページなら ToolError。"""
+    try:
+        result = response.json()
+    except ToolError:
+        result = None
+    # 古い入口ページは /api/ollama を知らず、HTML か {"ok", "message"} の無い 404 / 405 を返す。
+    known_shape = isinstance(result, dict) and any(key in result for key in ("ok", "installed", "reachable"))
+    if not known_shape:
+        if response.status in (404, 405):
+            raise ToolError(
+                "入口ページが古く、Ollama の操作（/api/ollama）がありません。サーバーで `systemctl --user restart portal` を"
+                "実行してもらうか、新しい tools/portal/portal.py に更新してください。"
+            )
+        raise ToolError(f"入口ページの /api/ollama の応答を読めません（HTTP {response.status}）: {response.error_text()}")
+    return result
+
+
+def tool_ollama(args: dict[str, Any]) -> dict[str, Any]:
+    action = str(args.get("action") or "list").strip()
+    if action not in ("list", "load", "unload"):
+        raise ToolError("action は 'list'・'load'・'unload' のどれかです。")
+    if action == "list":
+        response = http_json("GET", f"{portal_url()}/api/ollama")
+        result = portal_ollama_json(response)
+        if response.status != 200:
+            raise ToolError(f"Ollama の一覧を取れません（HTTP {response.status}）: {result.get('message') or response.error_text()}")
+        return result
+
+    model = str(args.get("model") or "").strip()
+    if not model or any(character.isspace() for character in model):
+        raise ToolError("model に Ollama のモデル名（例 qwen3.8:27b）を入れてください。action='list' で一覧が出ます。")
+    query = ""
+    if action == "load":
+        keep_alive = args.get("keep_alive")
+        if keep_alive not in (None, ""):
+            query = "?" + urllib.parse.urlencode({"keep_alive": str(keep_alive)})
+        status = fetch_status()
+        to_stop = running_gpu_services(status)
+        if to_stop and not bool(args.get("stop_others", False)):
+            names = {item["key"]: item.get("name") for item in status["services"]}
+            return {
+                "ok": False,
+                "model": model,
+                "would_stop": [{"key": key, "name": names.get(key)} for key in to_stop],
+                "message": (
+                    "読み込むと would_stop のサービスが止まります（Qwen 27B は VRAM を 22 GiB 使い、GPU を取り合うため）。"
+                    "他の人の作業を落とさないよう、ここでは読み込んでいません。止めてよいなら stop_others=true で呼び直してください。"
+                ),
+            }
+    timeout = float(args.get("timeout_sec") or (OLLAMA_LOAD_HTTP_TIMEOUT_SEC if action == "load" else 60.0))
+    response = http_json(
+        "POST", f"{portal_url()}/api/ollama/{urllib.parse.quote(model, safe=':/')}/{action}{query}",
+        payload=None, headers={"X-Portal-Request": "1"}, timeout=timeout,
+    )
+    result = portal_ollama_json(response)
+    if response.status == 404 and "installed" in result:
+        raise ToolError(f"{result.get('message')} 入っているモデル: {', '.join(result['installed'])}")
+    if response.status != 200:
+        raise ToolError(f"Ollama の {action} に失敗しました（HTTP {response.status}）: {result.get('message') or response.error_text()}")
+    if action == "load" and result.get("ok"):
+        result["note"] = (
+            "Ollama（11434）は LAN に公開していないので、この MCP からは話せません。"
+            f"Open WebUI（http://{server_host()}:8081/）か、SSH 経由の qwen-worker で使ってください。"
+        )
+    return result
+
+
 def tool_status(_: dict[str, Any]) -> dict[str, Any]:
     return summarize_status(fetch_status())
 
@@ -370,19 +456,30 @@ def tool_service(args: dict[str, Any]) -> dict[str, Any]:
     elif before == "stopped":
         return {"ok": True, "key": key, "state": "stopped", "message": f"{name} は既に停止しています。"}
 
-    response = http_json(
-        "POST", f"{portal_url()}/api/service/{urllib.parse.quote(key)}/{action}",
-        payload=None, headers={"X-Portal-Request": "1"}, timeout=120.0,
-    )
+    action_url = f"{portal_url()}/api/service/{urllib.parse.quote(key)}/{action}"
+    started = time.monotonic()
+    server_wait = int(min(max(timeout_sec, 0), PORTAL_WAIT_MAX_SEC)) if (action == "start" and wait) else None
+    if server_wait is not None:
+        # 入口ページに、使える状態（ポートが応答する）になるまで待ってもらう。起動失敗も入口ページが見分ける。
+        response = http_json(
+            "POST", f"{action_url}?wait={server_wait}", payload=None, headers={"X-Portal-Request": "1"},
+            timeout=server_wait + PORTAL_WAIT_MARGIN_SEC,
+        )
+        if response.status == 400 and is_old_portal_wait_error(response):
+            # ?wait= を知らない古い入口ページ。待たずに起動を頼み、下で MCP 側から問い合わせて待つ。
+            server_wait = None
+            response = http_json("POST", action_url, payload=None, headers={"X-Portal-Request": "1"}, timeout=120.0)
+    else:
+        response = http_json("POST", action_url, payload=None, headers={"X-Portal-Request": "1"}, timeout=120.0)
     try:
         result = response.json() or {}
     except ToolError:
         result = {"message": response.error_text()}
-    if response.status != 200 or not result.get("ok", False):
+    if response.status != 200 or (not result.get("ok", False) and "ready" not in result):
         raise ToolError(f"{name} の {action} に失敗しました（HTTP {response.status}）: {result.get('message') or response.error_text()}")
 
     output: dict[str, Any] = {
-        "ok": True, "key": key, "action": action, "message": result.get("message"),
+        "ok": bool(result.get("ok", False)), "key": key, "action": action, "message": result.get("message"),
         "stopped": result.get("stopped", []), "unloaded_models": result.get("unloaded_models", []),
     }
     if not wait:
@@ -390,9 +487,22 @@ def tool_service(args: dict[str, Any]) -> dict[str, Any]:
         output["note"] = "wait=false なので待っていません。localai_status で state を確かめてください。"
         return output
     wanted = "running" if action == "start" else "stopped"
-    state, elapsed = wait_for_state(key, wanted, timeout_sec)
-    output["state"] = state
-    output["waited_sec"] = round(elapsed, 1)
+    if server_wait is not None and "ready" in result:
+        state = str(result.get("state") or "unknown")
+        elapsed = time.monotonic() - started
+        if not result.get("ready") and result.get("ok") and timeout_sec > elapsed + 1:
+            # 入口ページの上限（30 分）では足りなかった。残りは MCP 側で待つ。
+            state, extra = wait_for_state(key, wanted, timeout_sec - elapsed)
+            elapsed += extra
+        output["state"] = state
+        output["waited_sec"] = round(elapsed, 1)
+        if not result.get("ok"):
+            # 入口ページが起動失敗（起動から 10 秒以上たっても停止中）と判断した。message に journalctl の案内が入っている。
+            return output
+    else:
+        state, elapsed = wait_for_state(key, wanted, timeout_sec)
+        output["state"] = state
+        output["waited_sec"] = round(elapsed, 1)
     if state != wanted:
         output["ok"] = False
         output["message"] = (
@@ -904,15 +1014,28 @@ def comfy_wait(base: str, prompt_id: str, timeout: float, directory: str | None,
         time.sleep(COMFY_POLL_SEC)
 
 
+def comfy_saved_workflow_url(base: str, name: str) -> str:
+    """サーバーの user/default/workflows/<name> を読む URL（純粋関数）。`..` や絶対パスは断る。"""
+    parts = [part for part in name.replace("\\", "/").split("/") if part]
+    if not parts or name.startswith("/") or any(part in (".", "..") for part in parts) or not parts[-1].endswith(".json"):
+        raise ToolError("workflow_name は workflows/ からの相対パスで、.json で終わる名前です（例 VFX/WanAlpha_T2V_api.json）。")
+    return f"{base}/api/userdata/{urllib.parse.quote('workflows/' + '/'.join(parts), safe='')}"
+
+
 def tool_comfyui(args: dict[str, Any]) -> dict[str, Any]:
     raw_workflow = args.get("workflow")
+    if args.get("workflow_name"):
+        response = http_json("GET", comfy_saved_workflow_url(comfy_base(), str(args["workflow_name"])), timeout=30.0)
+        if response.status != 200:
+            raise ToolError(f"サーバーにワークフロー {args['workflow_name']} がありません（HTTP {response.status}）。")
+        raw_workflow = response.json()
     if args.get("workflow_path"):
         try:
             raw_workflow = json.loads(resolve_input_path(str(args["workflow_path"])).read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             raise ToolError(f"ワークフローが JSON として読めません: {error}") from error
     if not isinstance(raw_workflow, dict) or not raw_workflow:
-        raise ToolError("workflow_path（API 形式の JSON のパス）か workflow（その中身）が要ります。")
+        raise ToolError("workflow_name（サーバーに保存したワークフロー）か workflow_path（API 形式の JSON のパス）か workflow（その中身）が要ります。")
     if is_ui_workflow(raw_workflow):
         raise ToolError(
             "これは画面で保存する UI 形式のワークフローです。API 形式が要ります。ComfyUI の画面の「Export (API)」で保存するか、"
@@ -988,7 +1111,7 @@ TOOLS: list[dict[str, Any]] = [
             "サービスを起動・停止する（入口ページの API）。key は localai_status の key（open-webui, strata, strata-coder, strata-official, "
             "strata-official-iq3s, strata-swift, hunyuan3d, pixal3d, comfyui, audiocraft, qwen3-tts, stable-audio）。GPU を使うものは同時に 1 つだけで、"
             "起動すると他が止まる。止まるもの・Ollama から降ろされるモデルがあるときは stop_others=true が無いと起動せず、その一覧を返す。"
-            "起動は Strata・Hunyuan3D で数分かかる。wait=true なら使えるようになるまで待つ。"
+            "起動は Strata・Hunyuan3D で数分かかる。wait=true なら使えるようになるまで待つ（入口ページの ?wait=。起動に失敗したら ok=false で返る）。"
         ),
         "inputSchema": _schema({
             "key": {"type": "string"},
@@ -998,6 +1121,23 @@ TOOLS: list[dict[str, Any]] = [
             "timeout_sec": {"type": "number", "description": "待つ上限。既定 900"},
         }, ["key", "action"]),
         "handler": tool_service,
+    },
+    {
+        "name": "localai_ollama",
+        "description": (
+            "Ollama のモデル（qwen3.8:27b など）を入口ページ経由で操作する。action=list で入っているモデルと VRAM に載っているモデル、"
+            "load で VRAM に載せる（載せ終わるまで待つ。初回は約 60 秒）、unload で降ろす。Qwen 27B は VRAM を 22 GiB 使うので、"
+            "load は GPU を使うサービス（Strata など）が動いていると stop_others=true が無い限り読み込まず、止まるものの一覧を返す。"
+            "Ollama そのものは LAN に出ていないので、載せたモデルとの会話は Open WebUI で行う。"
+        ),
+        "inputSchema": _schema({
+            "action": {"type": "string", "enum": ["list", "load", "unload"], "description": "既定 list"},
+            "model": {"type": "string", "description": "モデル名（例 qwen3.8:27b）。load / unload で必須"},
+            "keep_alive": {"type": "string", "description": "load で載せておく長さ。秒の整数・30m・2h・-1（無期限）。省略時は Ollama の既定 5 分"},
+            "stop_others": {"type": "boolean", "description": "稼働中の GPU サービスを止めてよい。既定 false"},
+            "timeout_sec": {"type": "number", "description": "HTTP の待ちの上限。既定 load 600・unload 60"},
+        }),
+        "handler": tool_ollama,
     },
     {
         "name": "localai_chat",
@@ -1093,8 +1233,11 @@ TOOLS: list[dict[str, Any]] = [
             "ComfyUI に API 形式のワークフロー（画面の Export (API) の JSON）を投入し、終わったら出力（画像・動画・メッシュ）をこの PC に保存する。"
             "image_inputs={\"ノード番号.入力名\": 画像のパス} で画像を上げてその入力に入れる。set={\"ノード番号.入力名\": 値} で値を書き換える。"
             "動画など長いものは wait=false で投げ、localai_comfyui_result で受け取る。"
+            "workflow_name でサーバーに保存した API 形式を名前で使える（例 VFX/WanAlpha_T2V_api.json・VFX/LayerDiffuse_SDXL_RGBA_api.json。"
+            "入力の対応は入口ページの GET /api の comfyui.workflows）。"
         ),
         "inputSchema": _schema({
+            "workflow_name": {"type": "string", "description": "サーバーの workflows/ からの相対パス（API 形式）"},
             "workflow_path": {"type": "string"}, "workflow": {"type": "object"},
             "image_inputs": {"type": "object"}, "upload_images": {"type": "array", "items": {"type": "string"}},
             "set": {"type": "object"}, "wait": {"type": "boolean"}, "include_temp": {"type": "boolean"},

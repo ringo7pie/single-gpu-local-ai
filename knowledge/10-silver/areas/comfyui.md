@@ -55,3 +55,4 @@ ComfyUI（ポート 8188、systemd user ユニット `comfyui`、enable しな�
   重みは `run-comfyui fetch-models --video`（約 111 GiB）。上流の事情と選んだ重みは `knowledge/10-silver/resources/comfyui-video.md` を Read する。
 - 所要時間は LTX・Kandinsky distill が 1.5〜2.5 分、Kandinsky Lite が約 19 分、HunyuanVideo が約 50 分（5 秒の動画、2026-11-06）。
   実測と RAM の振る舞いは `knowledge/10-silver/resources/comfyui-measurements.md` と `resources/comfyui-video.md` を Read する。
+- ゲームのエフェクト（Wan 2.1 Alpha・LayerDiffuse、Workflows → VFX）の上流の事情・パッチ・実測は `knowledge/10-silver/resources/comfyui-vfx.md` を Read する。

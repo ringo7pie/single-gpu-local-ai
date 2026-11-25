@@ -6,7 +6,13 @@
 
 エンドポイント:
     GET  /                                    index.html を返す（このファイルと同じディレクトリから読む）
+    GET  /api                                 この API の一覧（エンドポイント・サービス・ポート・GPU の排他・curl の例）を JSON で返す
     GET  /api/status                          GPU / Ollama / 各サービスの状態を JSON で返す
+    GET  /api/ollama                          Ollama に入っているモデル（installed）と VRAM に載っているモデル（loaded）
+    POST /api/ollama/<model>/<load|unload>    Ollama のモデルを VRAM に載せる / 降ろす（Ollama 11434 は LAN に公開していないため、
+                                               他の PC からはここを通す）。<model> は /api/tags にあるものだけ。load は載せ終わるまで
+                                               待ち、GPU を排他的に使うサービスが動いていれば先に止める。?keep_alive=<秒|30m|2h|-1>
+    （POST /api/service/<key>/start には ?wait=<秒> を付けられる。ポートが応答するまで待ってから ready・waited_sec を返す）
     GET  /guides/<名前>.html                  使い方のページ（guides/ の中の HTML）を返す。名前は英小文字・数字・
                                                ハイフンだけで、guides/ の直下に無いものは 404（../ などで外を読ませない）
     POST /api/service/<key>/<action>          Open WebUI・Strata（汎用版・Coder 版・公式版）・Hunyuan3D・Pixal3D・ComfyUI・
@@ -41,7 +47,9 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -57,10 +65,13 @@ GUIDE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*\.html")
 
 OLLAMA_STATUS_URL = "http://127.0.0.1:11434/api/ps"
 OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
 NVIDIA_SMI_TIMEOUT_SEC = 2.0
 OLLAMA_TIMEOUT_SEC = 2.0
 # モデルを降ろす要求は、生成中のモデルがあるとその終わりを待たされることがあるため、状態の確認より長くする。
 OLLAMA_UNLOAD_TIMEOUT_SEC = 20.0
+# モデルを VRAM へ載せる要求は、17 GB の読み込みに約 60 秒かかる（knowledge の env.md）。余裕を見て 5 分。
+OLLAMA_LOAD_TIMEOUT_SEC = 300.0
 PORT_CHECK_TIMEOUT_SEC = 0.3
 MIB_BYTES = 1024 * 1024
 GIB_BYTES = 1024 * 1024 * 1024
@@ -251,6 +262,62 @@ OPTION_VALUES = {"on": True, "off": False}
 # POST /api/memory/<key>/<high_gib>/<max_gib> の設定関連。
 MEMORY_ACTION_PATH_PREFIX = "/api/memory/"
 
+# POST /api/service/<key>/start?wait=<秒> の設定関連。wait を付けると、ポートが応答する（state が running になる）まで
+# 待ってから返す。Strata は API が応答するまで最大 15 分かかる作りなので、上限は 30 分にする。
+WAIT_MAX_SEC = 1800
+WAIT_POLL_SEC = 2.0
+# systemctl start --no-block の直後は、まだジョブが走る前で ActiveState が inactive のことがある。
+# 起動してからこの秒数が過ぎても stopped なら、起動に失敗した（プロセスが落ちた）とみなして待つのをやめる。
+START_FAILURE_GRACE_SEC = 10.0
+
+# GET /api/ollama と POST /api/ollama/<model>/<load|unload> の設定関連。Ollama（11434）は LAN に公開していないので、
+# 他の PC からのモデルの読み込み・解放はここを通す。<model> は Ollama に入っているモデル名だけを受け付ける（/api/tags と照合）。
+OLLAMA_PATH = "/api/ollama"
+OLLAMA_PATH_PREFIX = "/api/ollama/"
+OLLAMA_ACTIONS = ("load", "unload")
+# keep_alive は Ollama の書式（秒の整数か、末尾に s/m/h を付けた長さ。-1 は無期限）。0 は載せてすぐ降ろすことになるので受けない。
+KEEP_ALIVE_PATTERN = re.compile(r"-1|[1-9][0-9]{0,5}[smh]?")
+
+# GET /api（API の一覧）。
+API_CATALOG_PATHS = ("/api", "/api/")
+
+# GET /api の comfyui に載せる、ComfyUI（8188）の HTTP API と、他の PC から使う API 形式のワークフロー。
+# ワークフローの実体は tools/comfyui/vendor/ComfyUI/user/default/workflows/ にあり、tools/comfyui/scripts/adapt_vfx_workflows.py が書く。
+# inputs は「何を変えるか → ノード id と入力名」（POST /prompt の prompt[<id>]["inputs"][<入力名>] に入れる）。
+COMFYUI_API_WORKFLOWS = (
+    {
+        "name": "VFX/WanAlpha_T2V_api.json",
+        "description": "Wan 2.1 Alpha T2V 14B。透明度つきの動画（RGBA の PNG の連番と、RGBA のアニメ WebP）。LightX2V で 4 ステップ・cfg 1.0",
+        "inputs": {
+            "prompt": "6.text",
+            "negative_prompt": "7.text",
+            "seed": "3.seed",
+            "steps": "3.steps",
+            "cfg": "3.cfg",
+            "width": "40.width",
+            "height": "40.height",
+            "frames": "40.length",
+            "png_filename_prefix": "93.filename_prefix",
+            "webp_filename_prefix": "80.filename_prefix",
+            "webp_fps": "80.fps",
+        },
+    },
+    {
+        "name": "VFX/LayerDiffuse_SDXL_RGBA_api.json",
+        "description": "LayerDiffuse（SDXL base 1.0）。透明な 1 枚絵（RGBA の PNG）。幅と高さは 64 の倍数",
+        "inputs": {
+            "prompt": "6.text",
+            "negative_prompt": "7.text",
+            "seed": "3.seed",
+            "steps": "3.steps",
+            "cfg": "3.cfg",
+            "width": "5.width",
+            "height": "5.height",
+            "filename_prefix": "27.filename_prefix",
+        },
+    },
+)
+
 # 起動・停止の要求に必須のヘッダ。入口ページ自身の JavaScript だけが付ける。
 # 単純な POST（ヘッダ無し）は他サイトからでもブラウザが送れてしまうため、独自ヘッダを必須にして
 # クロスオリジンの事前確認（preflight）を強制する。こちらは preflight に応答しないので、
@@ -425,6 +492,155 @@ def describe_ollama_unload(result: dict[str, Any]) -> str:
             "VRAM が足りないと起動に失敗するおそれがあります（`ollama stop <モデル名>` で手動で降ろせます）。"
         )
     return "".join(sentences)
+
+
+def parse_ollama_tags(payload: Any) -> list[str]:
+    """Ollama `/api/tags`（入っているモデルの一覧）の JSON からモデル名を順に・重複なしで返す（純粋関数）。
+
+    形が想定と違っても例外を投げず、読み取れた分だけ返す。
+    """
+    model_names: list[str] = []
+    entries = payload.get("models") if isinstance(payload, dict) else None
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        model_name = entry.get("name") or entry.get("model")
+        if isinstance(model_name, str) and model_name and model_name not in model_names:
+            model_names.append(model_name)
+    return model_names
+
+
+def read_ollama_tags(timeout: float = OLLAMA_TIMEOUT_SEC) -> list[str] | None:
+    """Ollama の `/api/tags` を短いタイムアウトで呼び出す。到達できなければ None。"""
+    try:
+        with urllib.request.urlopen(OLLAMA_TAGS_URL, timeout=timeout) as response:
+            response_body = response.read()
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError):
+        return None
+    try:
+        payload = json.loads(response_body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return parse_ollama_tags(payload)
+
+
+def parse_ollama_action_path(path: str) -> tuple[str, str] | None:
+    """`/api/ollama/<model>/<action>` を解釈する（純粋関数）。形が違えば None。
+
+    モデル名は `hf.co/owner/name:tag` のように `/` を含むことがあるので、最後の `/` で action と分ける。
+    `%3A` などのパーセント符号は戻す（curl で `qwen3.8:27b` をそのまま書いても、符号化して送っても同じに扱う）。
+    """
+    if not path.startswith(OLLAMA_PATH_PREFIX):
+        return None
+    remainder = path[len(OLLAMA_PATH_PREFIX):]
+    model_part, separator, action = remainder.rpartition("/")
+    if not separator or not model_part or not action:
+        return None
+    model_name = urllib.parse.unquote(model_part)
+    if not model_name or any(character.isspace() for character in model_name):
+        return None
+    return model_name, action
+
+
+def parse_keep_alive(raw_value: str | None) -> tuple[int | str | None, str | None]:
+    """クエリの `keep_alive` を Ollama に渡す値へ直す（純粋関数）。戻り値は (値, エラー文)。
+
+    無指定は (None, None)（Ollama の既定 5 分）。数字だけなら秒の整数、末尾に s/m/h があれば文字列のまま渡す。
+    """
+    if raw_value is None or raw_value == "":
+        return None, None
+    if not KEEP_ALIVE_PATTERN.fullmatch(raw_value):
+        return None, (
+            "keep_alive は秒の整数か、末尾に s / m / h を付けた長さ（例 300・30m・2h）、"
+            "無期限は -1 です（0 は受け付けません）。"
+        )
+    if raw_value.lstrip("-").isdigit():
+        return int(raw_value), None
+    return raw_value, None
+
+
+def build_ollama_load_body(model_name: str, keep_alive: int | str | None) -> bytes:
+    """`POST /api/generate` でモデルを VRAM に載せる本文を作る（純粋関数）。
+
+    prompt を付けずに送ると、Ollama は生成せずにモデルを載せるだけで返る。keep_alive が None なら付けない（Ollama の既定）。
+    """
+    body: dict[str, Any] = {"model": model_name}
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
+    return json.dumps(body).encode("utf-8")
+
+
+def request_ollama_load(
+    model_name: str, keep_alive: int | str | None, timeout: float = OLLAMA_LOAD_TIMEOUT_SEC
+) -> tuple[bool, str]:
+    """Ollama へモデル 1 つを載せる要求を送り、載せ終わるまで待つ。戻り値は (成功か, 失敗の理由)。例外は投げない。"""
+    request = urllib.request.Request(
+        OLLAMA_GENERATE_URL,
+        data=build_ollama_load_body(model_name, keep_alive),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read()
+    except urllib.error.HTTPError as error:
+        try:
+            detail = error.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            detail = ""
+        return False, f"Ollama が HTTP {error.code} を返しました。{detail}"
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as error:
+        return False, f"Ollama への要求に失敗しました: {error}"
+    return True, ""
+
+
+def find_loaded_model(models: list[dict[str, Any]] | None, model_name: str) -> dict[str, Any] | None:
+    """`read_ollama_ps` の戻り値から `model_name` の項目を探す（純粋関数）。
+
+    `qwen3.8` と書かれたら Ollama と同じく `:latest` を補って照合する。
+    """
+    candidates = {model_name}
+    if ":" not in model_name.rsplit("/", 1)[-1]:
+        candidates.add(f"{model_name}:latest")
+    for model in models or []:
+        if isinstance(model, dict) and model.get("name") in candidates:
+            return model
+    return None
+
+
+def resolve_installed_model(model_name: str, installed: list[str]) -> str | None:
+    """利用者が書いたモデル名を、Ollama に入っている正式な名前に直す（純粋関数）。入っていなければ None。
+
+    タグを省いた `qwen3.8` は Ollama と同じく `qwen3.8:latest` とみなす。
+    """
+    if model_name in installed:
+        return model_name
+    if ":" not in model_name.rsplit("/", 1)[-1] and f"{model_name}:latest" in installed:
+        return f"{model_name}:latest"
+    return None
+
+
+def parse_wait_seconds(raw_value: str | None) -> tuple[int | None, str | None]:
+    """クエリの `wait`（起動完了まで待つ秒数）を解釈する（純粋関数）。戻り値は (秒, エラー文)。無指定は (None, None)。"""
+    if raw_value is None or raw_value == "":
+        return None, None
+    if not raw_value.isdigit() or not 0 <= int(raw_value) <= WAIT_MAX_SEC:
+        return None, f"wait は 0〜{WAIT_MAX_SEC} の整数（秒）です。"
+    return int(raw_value), None
+
+
+def split_path_and_query(raw_path: str) -> tuple[str, dict[str, str]]:
+    """`/api/service/x/start?wait=60` を `("/api/service/x/start", {"wait": "60"})` に分ける（純粋関数）。
+
+    同じ名前が複数あれば最後の値を使う。
+    """
+    path, _, query = raw_path.partition("?")
+    parameters: dict[str, str] = {}
+    for name, value in urllib.parse.parse_qsl(query, keep_blank_values=True):
+        parameters[name] = value
+    return path, parameters
 
 
 def parse_env_file(text: str) -> dict[str, str]:
@@ -679,6 +895,187 @@ def perform_service_action(service: dict[str, Any], action: str) -> dict[str, An
         "ok": False,
         "message": f"{service['name']} の{action_label}に失敗しました: {error_text}",
         "state": state,
+    }
+
+
+def current_service_state(service: dict[str, Any]) -> str:
+    """このサービスの現在の 4 状態（running/starting/stopped/not_installed）を実測する。"""
+    unit = service["unit"]
+    port_open = port_is_open(service["port"])
+    if unit:
+        active_state, load_state = read_unit_state(unit)
+    else:
+        active_state, load_state = ("unknown", "not-found")
+    return unit_state(active_state, load_state, port_open)
+
+
+def wait_until_ready(
+    service: dict[str, Any],
+    wait_sec: float,
+    state_reader: Any = None,
+    clock: Any = time.monotonic,
+    sleep: Any = time.sleep,
+    poll_sec: float = WAIT_POLL_SEC,
+    grace_sec: float = START_FAILURE_GRACE_SEC,
+) -> dict[str, Any]:
+    """起動を要求したサービスが running（ポートが応答する）になるまで待つ。例外は投げない。
+
+    戻り値は {"ready": bool, "failed": bool, "state": str, "waited_sec": float}。
+    - ready=True: 待ち時間のうちに running になった
+    - failed=True: grace_sec を過ぎても stopped / not_installed のまま（起動に失敗してプロセスが落ちた）
+    - どちらも False: 待ち時間が尽きた（まだ starting。Strata や Hunyuan3D は読み込みが長い）
+    state_reader・clock・sleep は試験で差し替えるための引数。
+    """
+    read_state = state_reader or current_service_state
+    started_at = clock()
+    deadline = started_at + wait_sec
+    while True:
+        state = read_state(service)
+        elapsed = clock() - started_at
+        if state == "running":
+            return {"ready": True, "failed": False, "state": state, "waited_sec": round(elapsed, 1)}
+        if state in ("stopped", "not_installed") and elapsed >= grace_sec:
+            return {"ready": False, "failed": True, "state": state, "waited_sec": round(elapsed, 1)}
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return {"ready": False, "failed": False, "state": state, "waited_sec": round(elapsed, 1)}
+        sleep(min(poll_sec, remaining))
+
+
+def describe_wait_result(service: dict[str, Any], wait_result: dict[str, Any]) -> str:
+    """`wait_until_ready` の結果を、起動の応答の message に足す日本語の文にする（純粋関数）。"""
+    waited = wait_result["waited_sec"]
+    if wait_result["ready"]:
+        return f"{service['name']} は使える状態になりました（{waited:.0f} 秒待ちました）。"
+    if wait_result["failed"]:
+        return (
+            f"{service['name']} は起動に失敗したようです（{waited:.0f} 秒後に停止中）。"
+            f"サーバーで `journalctl --user -u {service['unit']} -n 50` を確認してください。"
+        )
+    return (
+        f"{waited:.0f} 秒待ちましたが、まだ準備中です（state={wait_result['state']}）。"
+        "GET /api/status で state が running になるのを待ってください。"
+    )
+
+
+def host_name_from_header(host_header: str | None, fallback: str = "<server-ip>") -> str:
+    """HTTP の Host ヘッダ（`192.168.1.10:8080` など）からホスト名だけを取り出す（純粋関数）。"""
+    if not host_header:
+        return fallback
+    try:
+        host_name = urllib.parse.urlsplit(f"//{host_header}").hostname
+    except ValueError:
+        return fallback
+    if not host_name:
+        return fallback
+    return f"[{host_name}]" if ":" in host_name else host_name
+
+
+def build_comfyui_catalog(host_name: str) -> dict[str, Any]:
+    """`GET /api` の comfyui（純粋関数）。ComfyUI 自身の HTTP API の使い方と、保存してある API 形式のワークフロー。"""
+    port = next(service["port"] for service in SERVICES if service["key"] == "comfyui")
+    base_url = f"http://{host_name}:{port}"
+    return {
+        "base_url": base_url,
+        "start_first": "POST /api/service/comfyui/start?wait=600（入口ページ。GPU を使うほかのサービスは止まる）",
+        "endpoints": [
+            {"method": "GET", "path": "/api/userdata/workflows%2F<名前を URL 符号化>", "description": "保存したワークフローを読む（例 workflows%2FVFX%2FWanAlpha_T2V_api.json）"},
+            {"method": "GET", "path": "/api/userdata?dir=workflows/VFX", "description": "フォルダの中の一覧"},
+            {"method": "POST", "path": "/prompt", "description": '本文 {"prompt": <API 形式>, "client_id": <任意の文字列>}。応答の prompt_id で後を追う'},
+            {"method": "GET", "path": "/history/<prompt_id>", "description": "終わると outputs に出力のファイル名（filename・subfolder・type）が入る"},
+            {"method": "GET", "path": "/view?filename=<名前>&subfolder=<サブフォルダ>&type=output", "description": "出力のファイルを取る"},
+            {"method": "GET", "path": "/queue", "description": "実行中・待ちの一覧"},
+            {"method": "POST", "path": "/interrupt", "description": "実行中のものを止める"},
+        ],
+        "workflows": [
+            {**workflow, "url": f"{base_url}/api/userdata/{urllib.parse.quote('workflows/' + workflow['name'], safe='')}"}
+            for workflow in COMFYUI_API_WORKFLOWS
+        ],
+    }
+
+
+def build_api_catalog(host_name: str, portal_port: int) -> dict[str, Any]:
+    """`GET /api` が返す、この API の一覧（純粋関数）。他の PC から仕様を調べるためのもの。"""
+    base_url = f"http://{host_name}:{portal_port}"
+    services = []
+    for service in SERVICES:
+        services.append(
+            {
+                "key": service["key"],
+                "name": service["name"],
+                "port": service["port"],
+                "url": f"http://{host_name}:{service['port']}/",
+                "controllable": service["unit"] is not None,
+                "gpu_exclusive": service["key"] in GPU_EXCLUSIVE_KEYS,
+                "unloads_ollama_before_start": service["key"] in OLLAMA_UNLOAD_BEFORE_START_KEYS,
+                "options": [
+                    url_name
+                    for url_name, option_key in OPTION_URL_TO_KEY.items()
+                    if find_service_option(service, option_key) is not None
+                ],
+            }
+        )
+    header = f"{REQUIRED_ACTION_HEADER}: {REQUIRED_ACTION_HEADER_VALUE}"
+    return {
+        "name": "localai portal API",
+        "base_url": base_url,
+        "required_header": {
+            "name": REQUIRED_ACTION_HEADER,
+            "value": REQUIRED_ACTION_HEADER_VALUE,
+            "applies_to": "POST のすべて（無いと 403）",
+        },
+        "endpoints": [
+            {"method": "GET", "path": "/api", "description": "この一覧"},
+            {"method": "GET", "path": "/api/status", "description": "GPU・RAM・Ollama・各サービスの状態"},
+            {
+                "method": "POST",
+                "path": "/api/service/<key>/start",
+                "description": (
+                    "サービスを起動する。GPU を排他的に使うサービスは、同じグループで動いているものを止めてから起動する。"
+                    f"?wait=<秒>（0〜{WAIT_MAX_SEC}）を付けると、ポートが応答するまで待ってから返す"
+                    "（応答に ready・waited_sec が入る。HTTP クライアントのタイムアウトを wait より長くすること）"
+                ),
+            },
+            {"method": "POST", "path": "/api/service/<key>/stop", "description": "サービスを止める（止まるまで待ってから返る）"},
+            {
+                "method": "POST",
+                "path": "/api/option/<key>/low-vram/<on|off>",
+                "description": "低 VRAM モードの切り替え（options に low-vram があるサービスだけ。停止中のみ）",
+            },
+            {
+                "method": "POST",
+                "path": "/api/memory/<key>/<high_gib>/<max_gib>",
+                "description": "systemd のメモリ上限（MemoryHigh / MemoryMax、GiB の整数）",
+            },
+            {"method": "GET", "path": OLLAMA_PATH, "description": "Ollama に入っているモデルと、VRAM に載っているモデル"},
+            {
+                "method": "POST",
+                "path": "/api/ollama/<model>/load",
+                "description": (
+                    "Ollama のモデルを VRAM に載せる（載せ終わるまで待つ。初回は約 60 秒）。"
+                    "GPU を排他的に使うサービスが動いていれば先に止める。"
+                    "?keep_alive=<秒 | 30m | 2h | -1> で載せておく長さ（無指定は Ollama の既定 5 分）"
+                ),
+            },
+            {"method": "POST", "path": "/api/ollama/<model>/unload", "description": "Ollama のモデルを VRAM から降ろす"},
+        ],
+        "services": services,
+        "comfyui": build_comfyui_catalog(host_name),
+        "gpu_exclusive_keys": list(GPU_EXCLUSIVE_KEYS),
+        "ollama": {
+            "note": (
+                "Ollama（11434）は LAN に公開していない。モデルの読み込み・解放はこの API を、"
+                f"チャットは Open WebUI（http://{host_name}:8081/）か Strata の OpenAI 互換 API を使う"
+            ),
+        },
+        "examples": [
+            f"curl {base_url}/api/status",
+            f'curl -X POST -H "{header}" "{base_url}/api/service/strata/start?wait=900"',
+            f'curl -X POST -H "{header}" {base_url}/api/service/strata/stop',
+            f"curl {base_url}{OLLAMA_PATH}",
+            f'curl -X POST -H "{header}" "{base_url}/api/ollama/qwen3.8:27b/load?keep_alive=30m"',
+            f'curl -X POST -H "{header}" {base_url}/api/ollama/qwen3.8:27b/unload',
+        ],
     }
 
 
@@ -1096,16 +1493,22 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f"{self.address_string()} - - [{self.log_date_time_string()}] {message}\n")
 
     def do_GET(self) -> None:
+        path, _ = split_path_and_query(self.path)
         if self.path == "/" or self.path == "/index.html":
             self._serve_index()
         elif self.path == "/api/status":
             self._serve_status()
+        elif path in API_CATALOG_PATHS:
+            self._serve_api_catalog()
+        elif path == OLLAMA_PATH:
+            self._serve_ollama_models()
         elif self.path.startswith(GUIDE_PATH_PREFIX):
             self._serve_guide()
         elif (
             self.path.startswith(SERVICE_ACTION_PATH_PREFIX)
             or self.path.startswith(OPTION_PATH_PREFIX)
             or self.path.startswith(MEMORY_ACTION_PATH_PREFIX)
+            or self.path.startswith(OLLAMA_PATH_PREFIX)
         ):
             # 起動・停止・設定変更はどれも POST 専用。ブラウザのプリフェッチや履歴で誤って
             # 実行されないように、GET でこれらのパスを叩かれても何もせず 405 を返す。
@@ -1114,13 +1517,22 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self) -> None:
-        if self.path.startswith(SERVICE_ACTION_PATH_PREFIX):
-            parsed_path = parse_service_action_path(self.path)
+        path, query = split_path_and_query(self.path)
+        if path.startswith(SERVICE_ACTION_PATH_PREFIX):
+            parsed_path = parse_service_action_path(path)
             if parsed_path is None:
                 self._send_json(404, {"ok": False, "message": "パスが不正です。"})
                 return
             key, action = parsed_path
-            self._handle_service_action(key, action)
+            self._handle_service_action(key, action, query)
+            return
+        if path.startswith(OLLAMA_PATH_PREFIX):
+            parsed_ollama_path = parse_ollama_action_path(path)
+            if parsed_ollama_path is None:
+                self._send_json(404, {"ok": False, "message": "パスが不正です。"})
+                return
+            model_name, action = parsed_ollama_path
+            self._handle_ollama_action(model_name, action, query)
             return
         if self.path.startswith(OPTION_PATH_PREFIX):
             parsed_option_path = parse_option_path(self.path)
@@ -1176,34 +1588,75 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
             status = build_status(None, None, [])
         self._send_json(200, status)
 
+    def _serve_api_catalog(self) -> None:
+        portal_port = self.server.server_address[1]
+        self._send_json(200, build_api_catalog(host_name_from_header(self.headers.get("Host")), portal_port))
+
+    def _serve_ollama_models(self) -> None:
+        installed = read_ollama_tags()
+        loaded = read_ollama_ps()
+        self._send_json(
+            200,
+            {
+                "reachable": installed is not None,
+                "installed": installed or [],
+                "loaded": loaded or [],
+            },
+        )
+
     def _current_service_state(self, service: dict[str, Any]) -> str:
         """このサービスの現在の 4 状態（running/starting/stopped/not_installed）を実測する。"""
-        unit = service["unit"]
-        port_open = port_is_open(service["port"])
-        if unit:
-            active_state, load_state = read_unit_state(unit)
-        else:
-            active_state, load_state = ("unknown", "not-found")
-        return unit_state(active_state, load_state, port_open)
+        return current_service_state(service)
 
-    def _handle_service_action(self, key: str, action: str) -> None:
+    def _has_required_header(self) -> bool:
+        """POST に必須の独自ヘッダがあるか。無ければ 403 を返して False。"""
+        if self.headers.get(REQUIRED_ACTION_HEADER) == REQUIRED_ACTION_HEADER_VALUE:
+            return True
+        self._send_json(
+            403,
+            {
+                "ok": False,
+                "message": (
+                    f"{REQUIRED_ACTION_HEADER} ヘッダが要ります"
+                    "（入口ページ以外からの操作を防ぐため）。"
+                ),
+            },
+        )
+        return False
+
+    def _stop_gpu_exclusive_services(self, except_key: str | None) -> tuple[list[str], str | None]:
+        """GPU を排他的に使うサービスのうち、動いている（running / starting）ものを止める。
+
+        戻り値は (止めた key の一覧, 失敗したときの message)。1 つでも止められなければそこでやめ、message を返す
+        （両方立ち上がって RAM・VRAM が枯れるのを防ぐため、呼び出し元は起動・読み込みを中止する）。
+        """
+        states = {
+            exclusive_key: self._current_service_state(SERVICES_BY_KEY[exclusive_key])
+            for exclusive_key in GPU_EXCLUSIVE_KEYS
+            if exclusive_key in SERVICES_BY_KEY
+        }
+        if except_key is None:
+            keys_to_stop = [key for key, state in states.items() if state in ("running", "starting")]
+        else:
+            keys_to_stop = services_to_stop_before_start(except_key, states)
+        stopped_keys: list[str] = []
+        for key_to_stop in keys_to_stop:
+            other_service = SERVICES_BY_KEY[key_to_stop]
+            stop_result = perform_service_action(other_service, "stop")
+            if not stop_result["ok"]:
+                return stopped_keys, f"{other_service['name']} の停止に失敗しました: {stop_result['message']}"
+            stopped_keys.append(key_to_stop)
+        return stopped_keys, None
+
+    def _handle_service_action(self, key: str, action: str, query: dict[str, str] | None = None) -> None:
+        query = query or {}
         # 5 秒ごとには来ない操作なので、/api/status と違って必ずログに残す（誰が何をしたか分かるように）。
         sys.stderr.write(
             f"portal: 操作要求 {self.address_string()} - [{self.log_date_time_string()}] "
-            f"/api/service/{key}/{action}\n"
+            f"/api/service/{key}/{action}{' wait=' + query['wait'] if 'wait' in query else ''}\n"
         )
 
-        if self.headers.get(REQUIRED_ACTION_HEADER) != REQUIRED_ACTION_HEADER_VALUE:
-            self._send_json(
-                403,
-                {
-                    "ok": False,
-                    "message": (
-                        f"{REQUIRED_ACTION_HEADER} ヘッダが要ります"
-                        "（入口ページ以外からの操作を防ぐため）。"
-                    ),
-                },
-            )
+        if not self._has_required_header():
             return
 
         service = SERVICES_BY_KEY.get(key)
@@ -1213,6 +1666,11 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
 
         if action not in ALLOWED_ACTIONS:
             self._send_json(400, {"ok": False, "message": "action は start か stop のみです。"})
+            return
+
+        wait_sec, wait_error = parse_wait_seconds(query.get("wait"))
+        if wait_error is not None:
+            self._send_json(400, {"ok": False, "message": wait_error})
             return
 
         current_state = self._current_service_state(service)
@@ -1226,31 +1684,19 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
 
         stopped_keys: list[str] = []
         if action == "start" and key in GPU_EXCLUSIVE_KEYS:
-            # Hunyuan3D・Pixal3D・ComfyUI・AudioCraft・Strata（5 つ）は GPU を排他的に使う。起動する前に、同じグループで
-            # 動いている（running / starting）他サービスを止める。
-            states = {
-                exclusive_key: self._current_service_state(SERVICES_BY_KEY[exclusive_key])
-                for exclusive_key in GPU_EXCLUSIVE_KEYS
-                if exclusive_key in SERVICES_BY_KEY
-            }
-            for key_to_stop in services_to_stop_before_start(key, states):
-                other_service = SERVICES_BY_KEY[key_to_stop]
-                stop_result = perform_service_action(other_service, "stop")
-                if not stop_result["ok"]:
-                    # 両方立ち上がって RAM が枯れるのを防ぐため、停止に失敗したら起動しない。
-                    self._send_json(
-                        200,
-                        {
-                            "ok": False,
-                            "message": (
-                                f"{other_service['name']} の停止に失敗したため、起動を中止しました: "
-                                f"{stop_result['message']}"
-                            ),
-                            "state": current_state,
-                        },
-                    )
-                    return
-                stopped_keys.append(key_to_stop)
+            # Hunyuan3D・Pixal3D・ComfyUI・AudioCraft・Strata（5 つ）などは GPU を排他的に使う。起動する前に、同じグループで
+            # 動いている（running / starting）他サービスを止める。停止に失敗したら起動しない。
+            stopped_keys, stop_error = self._stop_gpu_exclusive_services(key)
+            if stop_error is not None:
+                self._send_json(
+                    200,
+                    {
+                        "ok": False,
+                        "message": stop_error.replace("に失敗しました:", "に失敗したため、起動を中止しました:", 1),
+                        "state": current_state,
+                    },
+                )
+                return
 
         # 同じ GPU を使うサービスを止めたあと（止めるのに失敗したら上で中止している）、Ollama のモデルを降ろす。
         # すでに動いている・起動中のものへの start は何も起こらないので、停止中のときだけ降ろす
@@ -1274,7 +1720,90 @@ class PortalRequestHandler(BaseHTTPRequestHandler):
         if unload_result is not None:
             result["unloaded_models"] = unload_result["unloaded"]
             result["message"] = f"{result['message']}{describe_ollama_unload(unload_result)}"
+        # ?wait=<秒> が付いていれば、ポートが応答する（running）まで待ってから返す。stop は止まるまで待つ作りなので対象外。
+        if action == "start" and wait_sec is not None and result["ok"]:
+            wait_result = wait_until_ready(service, wait_sec)
+            result = dict(result)
+            result["ready"] = wait_result["ready"]
+            result["waited_sec"] = wait_result["waited_sec"]
+            result["state"] = wait_result["state"]
+            if wait_result["failed"]:
+                result["ok"] = False
+            result["message"] = f"{result['message']}{describe_wait_result(service, wait_result)}"
         self._send_json(200, result)
+
+    def _handle_ollama_action(self, model_name: str, action: str, query: dict[str, str]) -> None:
+        sys.stderr.write(
+            f"portal: 操作要求 {self.address_string()} - [{self.log_date_time_string()}] "
+            f"/api/ollama/{model_name}/{action}\n"
+        )
+        if not self._has_required_header():
+            return
+        if action not in OLLAMA_ACTIONS:
+            self._send_json(400, {"ok": False, "message": "action は load か unload のみです。"})
+            return
+        keep_alive, keep_alive_error = parse_keep_alive(query.get("keep_alive"))
+        if keep_alive_error is not None:
+            self._send_json(400, {"ok": False, "message": keep_alive_error})
+            return
+
+        # 入っているモデルだけを受け付ける（知らない名前で Ollama を叩かせない）。
+        installed = read_ollama_tags()
+        if installed is None:
+            self._send_json(503, {"ok": False, "message": "Ollama に接続できません（ollama.service を確認してください）。"})
+            return
+        resolved_name = resolve_installed_model(model_name, installed)
+        if resolved_name is None:
+            self._send_json(
+                404,
+                {"ok": False, "message": f"Ollama に {model_name} は入っていません。", "installed": installed},
+            )
+            return
+
+        if action == "unload":
+            loaded_entry = find_loaded_model(read_ollama_ps(), resolved_name)
+            if loaded_entry is None:
+                self._send_json(
+                    200, {"ok": True, "message": f"{resolved_name} は VRAM に載っていません。", "model": resolved_name}
+                )
+                return
+            unloaded = request_ollama_unload(resolved_name)
+            message = (
+                f"{resolved_name} を VRAM から降ろしました。" if unloaded
+                else f"{resolved_name} を降ろせませんでした（Ollama への要求が失敗しました）。"
+            )
+            self._send_json(200, {"ok": unloaded, "message": message, "model": resolved_name})
+            return
+
+        # load: Qwen 27B は VRAM を 22 GiB 使い、GPU を排他的に使うサービスと同居できない。先に止める。
+        stopped_keys, stop_error = self._stop_gpu_exclusive_services(None)
+        if stop_error is not None:
+            self._send_json(
+                200,
+                {"ok": False, "message": f"{stop_error} 読み込みを中止しました。", "stopped": stopped_keys},
+            )
+            return
+        loaded_ok, load_error = request_ollama_load(resolved_name, keep_alive)
+        loaded_models = read_ollama_ps()
+        loaded_entry = find_loaded_model(loaded_models, resolved_name)
+        messages: list[str] = []
+        if stopped_keys:
+            messages.append(f"{'、'.join(SERVICES_BY_KEY[stopped_key]['name'] for stopped_key in stopped_keys)} を停止しました。")
+        if loaded_ok:
+            messages.append(f"{resolved_name} を VRAM に載せました。")
+        else:
+            messages.append(f"{resolved_name} を載せられませんでした: {load_error}")
+        self._send_json(
+            200,
+            {
+                "ok": loaded_ok,
+                "message": "".join(messages),
+                "model": resolved_name,
+                "stopped": stopped_keys,
+                "size_vram_mib": loaded_entry["size_vram_mib"] if loaded_entry else None,
+                "loaded_models": loaded_models or [],
+            },
+        )
 
     def _handle_option_action(self, key: str, option_name: str, value: str) -> None:
         # 起動・停止と同じく、設定変更も必ずログに残す。

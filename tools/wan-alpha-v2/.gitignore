@@ -1,0 +1,6 @@
+# 上流の clone・重み・venv・出力は追跡しない。
+vendor/
+models/
+.venv/
+output/
+logs/

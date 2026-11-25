@@ -10,6 +10,7 @@ import io
 import json
 import sys
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,10 @@ class FakeState:
         self.comfy_prompts: dict[str, Any] = {}
         self.comfy_done = True
         self.gradio_fail = False
+        # 入口ページの ?wait= と /api/ollama（2026-11-25 追加）の振る舞い
+        self.old_portal = False          # True なら ?wait= を知らず、/api/ollama も無い古い入口ページ
+        self.start_fails = False         # True なら ?wait= 付きの起動で、入口ページが起動失敗と判断する
+        self.ollama_installed = ["qwen3.8:27b", "gemma4:e4b"]
 
 
 GRADIO_INFO = {
@@ -102,6 +107,9 @@ def make_handler(state: FakeState):
                     "services": [{"key": key, "name": key.upper(), "port": state.port, "state": value}
                                  for key, value in state.states.items()],
                 })
+            if path == "/api/ollama" and not state.old_portal:
+                return self._json(200, {"reachable": True, "installed": state.ollama_installed,
+                                        "loaded": [{"name": name, "size_vram_mib": 22201} for name in state.ollama_models]})
             if path == "/v1/models":
                 return self._json(200, {"data": [{"id": "strata-swift:IQ3_XXS"}]})
             if path == "/gradio_api/info":
@@ -134,6 +142,11 @@ def make_handler(state: FakeState):
                 }})
             if path.startswith("/view?"):
                 return self._send(200, PNG_BYTES, "image/png")
+            if path.startswith("/api/userdata/"):
+                name = urllib.parse.unquote(path[len("/api/userdata/"):])
+                if name == "workflows/VFX/Test_api.json":
+                    return self._json(200, {"6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a"}}})
+                return self._json(404, {"error": "not found"})
             if path == "/queue":
                 return self._json(200, {"queue_running": [[0, "p1"]], "queue_pending": []})
             self._json(404, {"error": "not found"})
@@ -142,10 +155,35 @@ def make_handler(state: FakeState):
             body = self._body()
             state.requests.append(("POST", self.path, dict(self.headers.items()), body))
             path = self.path
+            path, _, query = path.partition("?")
+            query_values = dict(urllib.parse.parse_qsl(query))
+            if path.startswith("/api/ollama/") and not state.old_portal:
+                if self.headers.get("X-Portal-Request") != "1":
+                    return self._json(403, {"ok": False, "message": "header"})
+                model_part, _, action = path[len("/api/ollama/"):].rpartition("/")
+                model = urllib.parse.unquote(model_part)
+                if model not in state.ollama_installed:
+                    return self._json(404, {"ok": False, "message": f"Ollama に {model} は入っていません。",
+                                            "installed": state.ollama_installed})
+                if action == "load":
+                    stopped = [key for key in mcp.GPU_EXCLUSIVE_KEYS if state.states.get(key) in ("running", "starting")]
+                    for key in stopped:
+                        state.states[key] = "stopped"
+                    state.ollama_models = [model]
+                    return self._json(200, {"ok": True, "message": "loaded", "model": model, "stopped": stopped,
+                                            "size_vram_mib": 22201, "keep_alive_seen": query_values.get("keep_alive")})
+                state.ollama_models = [name for name in state.ollama_models if name != model]
+                return self._json(200, {"ok": True, "message": "unloaded", "model": model})
             if path.startswith("/api/service/"):
                 if self.headers.get("X-Portal-Request") != "1":
                     return self._json(403, {"ok": False, "message": "header"})
+                if query and state.old_portal:
+                    return self._json(400, {"ok": False, "message": "action は start か stop のみです。"})
                 _, _, _, key, action = path.split("/")
+                if action == "start" and "wait" in query_values and state.start_fails:
+                    state.states[key] = "stopped"
+                    return self._json(200, {"ok": False, "ready": False, "state": "stopped", "waited_sec": 10.0,
+                                            "message": "起動に失敗したようです。journalctl を確認してください。", "stopped": []})
                 stopped = []
                 if action == "start":
                     for other in mcp.GPU_EXCLUSIVE_KEYS:
@@ -155,7 +193,10 @@ def make_handler(state: FakeState):
                     state.states[key] = "running"
                 else:
                     state.states[key] = "stopped"
-                return self._json(200, {"ok": True, "message": f"{action} ok", "stopped": stopped})
+                payload = {"ok": True, "message": f"{action} ok", "stopped": stopped}
+                if action == "start" and "wait" in query_values:
+                    payload.update({"ready": True, "state": "running", "waited_sec": 1.5})
+                return self._json(200, payload)
             if path == "/v1/chat/completions":
                 request = json.loads(body)
                 return self._json(200, {"model": request["model"], "choices": [{
@@ -340,7 +381,7 @@ def test_mcp_handshake_and_call(fake):
     assert set(by_id) == {1, 2, 3, 4, 5}  # 通知には応えない
     assert by_id[1]["result"]["protocolVersion"] == "2025-03-26"
     names = {tool["name"] for tool in by_id[2]["result"]["tools"]}
-    assert {"localai_status", "localai_service", "localai_chat", "localai_music", "localai_sound", "localai_stable_audio",
+    assert {"localai_status", "localai_service", "localai_ollama", "localai_chat", "localai_music", "localai_sound", "localai_stable_audio",
             "localai_tts", "localai_mesh", "localai_comfyui", "localai_comfyui_result",
             "localai_gradio_info", "localai_gradio_call"} == names
     for tool in by_id[2]["result"]["tools"]:
@@ -382,7 +423,7 @@ def test_service_start_with_stop_others_and_wait(fake):
     error, result = call("localai_service", {"key": "audiocraft", "action": "start", "stop_others": True})
     assert not error and result["ok"] and result["state"] == "running" and result["stopped"] == ["stable-audio"]
     post = [request for request in fake.requests if request[0] == "POST"][0]
-    assert post[1] == "/api/service/audiocraft/start" and post[2].get("X-Portal-Request") == "1"
+    assert post[1] == "/api/service/audiocraft/start?wait=900" and post[2].get("X-Portal-Request") == "1"
 
 
 def test_service_start_free_and_stop(fake):
@@ -394,6 +435,87 @@ def test_service_start_free_and_stop(fake):
     assert not error and result["state"] == "stopped"
     error, result = call("localai_service", {"key": "open-webui", "action": "stop"})
     assert "既に停止" in result["message"]
+
+
+def test_service_start_uses_portal_wait(fake):
+    error, result = call("localai_service", {"key": "strata", "action": "start", "timeout_sec": 900})
+    assert not error and result["ok"] and result["state"] == "running" and result["waited_sec"] >= 0
+    posts = [request[1] for request in fake.requests if request[0] == "POST"]
+    assert posts == ["/api/service/strata/start?wait=900"]
+    # 入口ページが待ったので、MCP 側から /api/status を問い合わせ続けていない（起動前の 1 回だけ）
+    assert sum(1 for request in fake.requests if request[1] == "/api/status") == 1
+
+
+def test_service_start_wait_is_capped_at_portal_limit(fake):
+    error, result = call("localai_service", {"key": "open-webui", "action": "start", "timeout_sec": 99999})
+    assert not error and result["ok"]
+    assert [request[1] for request in fake.requests if request[0] == "POST"] == [
+        f"/api/service/open-webui/start?wait={mcp.PORTAL_WAIT_MAX_SEC}"
+    ]
+
+
+def test_service_start_reports_failure_from_portal(fake):
+    fake.start_fails = True
+    error, result = call("localai_service", {"key": "open-webui", "action": "start"})
+    assert not error and result["ok"] is False and result["state"] == "stopped"
+    assert "journalctl" in result["message"]
+
+
+def test_service_start_falls_back_on_old_portal(fake):
+    fake.old_portal = True
+    error, result = call("localai_service", {"key": "open-webui", "action": "start"})
+    assert not error and result["ok"] and result["state"] == "running"
+    posts = [request[1] for request in fake.requests if request[0] == "POST"]
+    assert posts == ["/api/service/open-webui/start?wait=900", "/api/service/open-webui/start"]
+
+
+def test_service_start_without_wait_does_not_send_wait(fake):
+    error, result = call("localai_service", {"key": "open-webui", "action": "start", "wait": False})
+    assert not error and result["state"] == "starting"
+    assert [request[1] for request in fake.requests if request[0] == "POST"] == ["/api/service/open-webui/start"]
+
+
+def test_ollama_list(fake):
+    fake.ollama_models = ["qwen3.8:27b"]
+    error, result = call("localai_ollama", {})
+    assert not error
+    assert result["installed"] == ["qwen3.8:27b", "gemma4:e4b"]
+    assert result["loaded"] == [{"name": "qwen3.8:27b", "size_vram_mib": 22201}]
+
+
+def test_ollama_load_refuses_when_it_would_stop_others(fake):
+    fake.states["strata"] = "running"
+    error, result = call("localai_ollama", {"action": "load", "model": "qwen3.8:27b"})
+    assert not error and result["ok"] is False
+    assert [item["key"] for item in result["would_stop"]] == ["strata"]
+    assert not any(method == "POST" for method, *_ in fake.requests)
+    assert fake.states["strata"] == "running"
+
+
+def test_ollama_load_with_stop_others_and_keep_alive(fake):
+    fake.states["strata"] = "running"
+    error, result = call("localai_ollama", {"action": "load", "model": "qwen3.8:27b", "keep_alive": "30m", "stop_others": True})
+    assert not error and result["ok"] and result["stopped"] == ["strata"]
+    assert result["keep_alive_seen"] == "30m" and "Open WebUI" in result["note"]
+    post = [request for request in fake.requests if request[0] == "POST"][0]
+    assert post[1] == "/api/ollama/qwen3.8:27b/load?keep_alive=30m" and post[2].get("X-Portal-Request") == "1"
+    assert fake.ollama_models == ["qwen3.8:27b"]
+
+
+def test_ollama_unload_and_unknown_model(fake):
+    fake.ollama_models = ["qwen3.8:27b"]
+    error, result = call("localai_ollama", {"action": "unload", "model": "qwen3.8:27b"})
+    assert not error and result["ok"] and fake.ollama_models == []
+    error, text = call("localai_ollama", {"action": "load", "model": "nosuch:1b"})
+    assert error and "gemma4:e4b" in text
+
+
+def test_ollama_rejects_bad_input_and_old_portal(fake):
+    assert call("localai_ollama", {"action": "pull", "model": "qwen3.8:27b"})[0]
+    assert call("localai_ollama", {"action": "load"})[0]
+    fake.old_portal = True
+    error, text = call("localai_ollama", {})
+    assert error and "入口ページが古く" in text
 
 
 def test_service_rejects_bad_input(fake):
@@ -523,6 +645,18 @@ def test_comfyui_async_and_ui_format(fake, tmp_path):
     assert not error and done["status"] == "success" and len(done["saved"]) == 2
     error, text = call("localai_comfyui", {"workflow": {"nodes": [], "links": []}})
     assert error and "Export (API)" in text
+
+
+def test_comfyui_saved_workflow(fake):
+    fake.states["comfyui"] = "running"
+    error, result = call("localai_comfyui", {"workflow_name": "VFX/Test_api.json", "set": {"6.text": "mist"}})
+    assert not error, result
+    assert fake.comfy_prompts[result["prompt_id"]]["6"]["inputs"]["text"] == "mist"
+    assert any(path == "/api/userdata/workflows%2FVFX%2FTest_api.json" for _m, path, _h, _b in fake.requests)
+    error, text = call("localai_comfyui", {"workflow_name": "VFX/Missing_api.json"})
+    assert error and "ありません" in text
+    for bad in ("../secret.json", "/etc/x.json", "VFX/a.txt"):
+        assert call("localai_comfyui", {"workflow_name": bad})[0]
 
 
 def test_check_command(fake, capsys):

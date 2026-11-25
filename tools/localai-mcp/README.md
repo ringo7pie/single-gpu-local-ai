@@ -23,16 +23,18 @@
 | ツール | すること |
 |---|---|
 | `localai_status` | 全サービスの状態（`running` / `starting` / `stopped`）・GPU の使用量・Ollama に載っているモデル |
-| `localai_service` | 起動・停止（`key`・`action`）。`wait=true`（既定）なら使えるまで待つ |
+| `localai_service` | 起動・停止（`key`・`action`）。`wait=true`（既定）なら使えるまで待つ（入口ページの `?wait=` で待つ。起動に失敗したら `ok: false` で返る。`?wait=` の無い古い入口ページでは MCP 側で 5 秒ごとに状態を見て待つ） |
+| `localai_ollama` | Ollama のモデル（`qwen3.8:27b` など）。`action=list`（既定）で入っているもの・載っているもの、`load` で VRAM に載せる（載せ終わるまで待つ。`keep_alive` で載せておく長さ）、`unload` で降ろす |
 | `localai_chat` | Strata 5 種（`strata` / `strata-coder` / `strata-official` / `strata-official-iq3s` / `strata-swift`）に質問 |
 | `localai_music` / `localai_sound` | AudioCraft の作曲（1〜30 秒）・効果音（1〜20 秒）。続き・メロディ指定は `audio_path` |
 | `localai_stable_audio` | Stable Audio 3.0 Medium（1〜380 秒）。音→音・部分の作り直し・続き |
 | `localai_tts` | Qwen3-TTS VoiceDesign。声の特徴を文章（`design`）で指定して `text` を読み上げ |
 | `localai_mesh` | Hunyuan3D / Pixal3D。正面（必須）・背面・左・右の画像から 3D メッシュ |
-| `localai_comfyui` / `localai_comfyui_result` | ComfyUI に API 形式のワークフローを投入し、出力を受け取る（長いものは `wait=false` で投げて後で受け取る） |
+| `localai_comfyui` / `localai_comfyui_result` | ComfyUI に API 形式のワークフローを投入し、出力を受け取る（長いものは `wait=false` で投げて後で受け取る）。`workflow_name` でサーバーに保存したワークフローを名前で使える（例 `VFX/WanAlpha_T2V_api.json`。入力の対応は入口ページの `GET /api` の `comfyui.workflows`） |
 | `localai_gradio_info` / `localai_gradio_call` | Gradio のサービスの API を名前で呼ぶ汎用の口（専用ツールに無い機能・細かい設定用） |
 
-Open WebUI はブラウザの画面なので、起動・停止だけ。Ollama の Qwen 27B は LAN に出していないので対象外（他の PC からは `tools/qwen-worker` の SSH 経由で使う）。
+Open WebUI はブラウザの画面なので、起動・停止だけ。Ollama（11434）は LAN に出していないので、この MCP からできるのは `localai_ollama` での読み込み・解放まで。
+載せたモデルとの会話は Open WebUI か、`tools/qwen-worker` の SSH 経由で行う。
 
 ### GPU の取り合い
 
@@ -40,11 +42,12 @@ A30 は 1 枚で、GPU を使うサービス（Strata 5 種・Hunyuan3D・Pixal3
 入口ページは起動のたびに他を止め、Strata・AudioCraft・Qwen3-TTS・Stable Audio の前には Ollama のモデルを降ろす。
 **この MCP は、止まるもの・降ろされるものがあるときは起動せず、その一覧を返す。** 止めてよければ `stop_others=true` で呼び直す
 （他の人が使っているかもしれないので、モデルには利用者に確かめるよう指示している）。
+`localai_ollama` の `load` も同じで、GPU を使うサービスが動いていれば `stop_others=true` が無い限り読み込まない（Qwen 27B は VRAM を 22 GiB 使う）。
 
 ## 他の PC への導入
 
 `tools/localai-mcp/` をサーバーの共有（`\\<server-ip>\<user>\Proj\localai\tools\localai-mcp\`）か clone から取り、1 回実行する。
-何度実行してもよい（登録を新しい値で入れ直す）。
+何度実行してもよい（登録を新しい値で入れ直す）。`localai_mcp.py` は写して使うので、新しい版（0.2.0 で `localai_ollama` と入口ページの `?wait=` を追加）にするときも再実行する。
 
 ```bash
 # Linux / macOS
@@ -92,6 +95,7 @@ sudo ufw status numbered
 - 「audiocraft を起動して（Stable Audio は止めてよい）。hum.wav のメロディで 20 秒のピアノ曲を作って」
 - 「pixal3d で front.png・left.png・right.png・back.png から 3D を作って」
 - 「comfyui で workflows/api.json を投げて、10 番の画像に input.png を入れて」
+- 「Ollama に入っているモデルを見せて」「qwen3.8:27b を 30 分載せておいて（Strata は止めてよい）」
 
 ## 試験
 

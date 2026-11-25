@@ -155,6 +155,13 @@ CUSTOM_NODES = (
         "https://github.com/city96/ComfyUI-GGUF.git",
         "6ea2651e7df66d7585f6ffee804b20e92fb38b8a",
     ),
+    # ゲームのエフェクト（透明な 1 枚絵）。requirements.txt は diffusers>=0.29.0 と opencv-python。
+    # 入れると diffusers 0.43.0 が増えるだけで、既存の版は替わらなかった（2026-11-25 の pip freeze の差）。
+    (
+        "ComfyUI-layerdiffuse",
+        "https://github.com/huchenlei/ComfyUI-layerdiffuse.git",
+        "b4f6a9e024064a4489f774a8b91049ce0b606ea3",
+    ),
 )
 
 # CUDA 拡張のソース（フォルダ名, URL, コミット）。vendor/extensions に置く。
@@ -557,5 +564,108 @@ VIDEO_MODEL_FILES = (
         "config.json",
         1403,
         "65b7f487bfaf15256056a75f6667ef5f640214c981922a111927873705ea4ddb",
+    ),
+)
+
+# ---- ゲームのエフェクト（VFX）: 透明度つきの動画（Wan 2.1 Alpha）と、透明な 1 枚絵（LayerDiffuse + SDXL）。2026-11-25 追加。
+# fetch-models --vfx で取る（--video とは別。合計 約 34 GiB）。行の形は VIDEO_MODEL_FILES と同じ。
+# サイズと sha256 は依頼元が Hugging Face の API から読んだ値（2026-11-25）。
+VFX_WORKFLOWS_DIR = COMFYUI_DIR / "user" / "default" / "workflows" / "VFX"
+VFX_OUTPUT_DIR = COMFYUI_DIR / "output" / "dq_vfx_trial"
+VFX_MODEL_GROUPS = ("wanalpha", "layerdiffuse")
+VFX_MODEL_GROUP_LABELS = {
+    "wanalpha": "Wan 2.1 Alpha T2V 14B",
+    "layerdiffuse": "LayerDiffuse（SDXL base 1.0）",
+}
+VFX_MODEL_FILES = (
+    (
+        "wanalpha",
+        "diffusion_models",
+        "wan2.1_t2v_14B_fp8_scaled.safetensors",
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "split_files/diffusion_models/wan2.1_t2v_14B_fp8_scaled.safetensors",
+        14293896178,
+        "2e39adde59c5e0e90edbb35873126b0d67928b5c11c501e384e976d6dc597cce",
+    ),
+    (
+        "wanalpha",
+        "text_encoders",
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        6735906897,
+        "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+    ),
+    (
+        "wanalpha",
+        "vae",
+        "wan_alpha_2.1_vae_rgb_channel.safetensors",
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "split_files/vae/wan_alpha_2.1_vae_rgb_channel.safetensors",
+        253806246,
+        "a61795bd0cd2ef02074cda8f4898d5efd34d804b7ac6974d8b2975c5678de371",
+    ),
+    (
+        "wanalpha",
+        "vae",
+        "wan_alpha_2.1_vae_alpha_channel.safetensors",
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "split_files/vae/wan_alpha_2.1_vae_alpha_channel.safetensors",
+        253806246,
+        "5695e8d8abbc5680fe3eefbf6c1885c989df40d1d3c83c29e87ae5b363f0c0a7",
+    ),
+    (
+        "wanalpha",
+        "loras",
+        "wan_alpha_2.1_rgba_lora.safetensors",
+        "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "split_files/loras/wan_alpha_2.1_rgba_lora.safetensors",
+        311648408,
+        "45d6347c4ff6ea975a43ef447eeb1e73d313224601350899369cc3fec1709931",
+    ),
+    (
+        "wanalpha",
+        "loras",
+        "lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors",
+        "Kijai/WanVideo_comfy",
+        "Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors",
+        630697104,
+        "37d49218544b9e0bfb8e831d1399f451fbc5068aff6474f42a90c928363c3573",
+    ),
+    (
+        "layerdiffuse",
+        "layer_model",
+        "layer_xl_transparent_attn.safetensors",
+        "LayerDiffusion/layerdiffusion-v1",
+        "layer_xl_transparent_attn.safetensors",
+        743352688,
+        "b7919c5b4837fb64f24c97a7abdf1a9c6e8d60de080a5dae089dde098266df95",
+    ),
+    (
+        "layerdiffuse",
+        "layer_model",
+        "layer_xl_transparent_conv.safetensors",
+        "LayerDiffusion/layerdiffusion-v1",
+        "layer_xl_transparent_conv.safetensors",
+        3619745776,
+        "5ee958d80dcd515fa7ac915274c536fadd3db5d919adeb5ff45107b6169aacc7",
+    ),
+    (
+        "layerdiffuse",
+        "layer_model",
+        "vae_transparent_decoder.safetensors",
+        "LayerDiffusion/layerdiffusion-v1",
+        "vae_transparent_decoder.safetensors",
+        208266320,
+        "59dc8feefe40d26b6cb7186aed7af70c60d94ac4f9db8ebe7f121a01ba27a2fc",
+    ),
+    (
+        "layerdiffuse",
+        "checkpoints",
+        "sd_xl_base_1.0.safetensors",
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        "sd_xl_base_1.0.safetensors",
+        6938078334,
+        "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b",
     ),
 )

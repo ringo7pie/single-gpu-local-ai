@@ -587,8 +587,20 @@ def _download(url: str, target: Path) -> None:
     part.replace(target)
 
 
-def _fetch_one(subdir: str, file_name: str, repo: str, path_in_repo: str, size: int, sha256: str, verify: bool) -> bool:
-    """重み 1 ファイルを取り、sha256 を確かめる。成功（既にある場合を含む）で True。"""
+def _fetch_one(
+    subdir: str,
+    file_name: str,
+    repo: str,
+    path_in_repo: str,
+    size: int,
+    sha256: str,
+    verify: bool,
+    delete_on_mismatch: bool = False,
+) -> bool:
+    """重み 1 ファイルを取り、sha256 を確かめる。成功（既にある場合を含む）で True。
+
+    delete_on_mismatch が True なら、sha256 が合わないファイルを消す（VFX の重み。依頼元の取り決め）。
+    """
 
     target = config.MODELS_DIR / subdir / file_name
     label = f"{subdir}/{file_name}"
@@ -611,6 +623,9 @@ def _fetch_one(subdir: str, file_name: str, repo: str, path_in_repo: str, size: 
             f"上流が更新された可能性があります。{target} を確認してください",
             file=sys.stderr,
         )
+        if delete_on_mismatch:
+            target.unlink()
+            print(f"  {label}: 合わないファイルを消しました", file=sys.stderr)
         return False
     print(f"  {label}: sha256 を確認しました", flush=True)
     return True
@@ -623,6 +638,15 @@ def selected_video_entries(video: bool, groups: list[str] | None) -> list[tuple[
         return []
     wanted = set(groups) if groups else set(config.VIDEO_MODEL_GROUPS)
     return [entry for entry in config.VIDEO_MODEL_FILES if entry[0] in wanted]
+
+
+def selected_vfx_entries(vfx: bool, groups: list[str] | None) -> list[tuple[str, str, str, str, str, int, str]]:
+    """fetch-models の --vfx / --vfx-group から、取る VFX の重みを選ぶ（--vfx-group は --vfx を含む）。"""
+
+    if not vfx and not groups:
+        return []
+    wanted = set(groups) if groups else set(config.VFX_MODEL_GROUPS)
+    return [entry for entry in config.VFX_MODEL_FILES if entry[0] in wanted]
 
 
 def cmd_fetch_models(args: argparse.Namespace) -> int:
@@ -641,6 +665,13 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
         print(f"動画の重み {len(video_entries)} ファイル（合計 {total / 1024 ** 3:.1f} GiB）", flush=True)
     for _group, subdir, file_name, repo, path_in_repo, size, sha256 in video_entries:
         if not _fetch_one(subdir, file_name, repo, path_in_repo, size, sha256, args.verify):
+            failures += 1
+    vfx_entries = selected_vfx_entries(args.vfx, args.vfx_group)
+    if vfx_entries:
+        total = sum(entry[5] for entry in vfx_entries)
+        print(f"VFX の重み {len(vfx_entries)} ファイル（合計 {total / 1024 ** 3:.1f} GiB）", flush=True)
+    for _group, subdir, file_name, repo, path_in_repo, size, sha256 in vfx_entries:
+        if not _fetch_one(subdir, file_name, repo, path_in_repo, size, sha256, args.verify, delete_on_mismatch=True):
             failures += 1
     if video_entries:
         for image_name, image_url in config.VIDEO_SAMPLE_IMAGES:
@@ -712,6 +743,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         choices=config.VIDEO_MODEL_GROUPS,
         help="動画の重みをこのグループだけにする（何度でも指定できる。--video を含む）",
+    )
+    fetch_parser.add_argument(
+        "--vfx",
+        action="store_true",
+        help="ゲームのエフェクトの重み（Wan 2.1 Alpha・LayerDiffuse と SDXL base 1.0、合計 約 34 GiB）も取る",
+    )
+    fetch_parser.add_argument(
+        "--vfx-group",
+        action="append",
+        choices=config.VFX_MODEL_GROUPS,
+        help="VFX の重みをこのグループだけにする（何度でも指定できる。--vfx を含む）",
     )
     fetch_parser.add_argument(
         "--skip-3d", action="store_true", help="3D（PixelArtistry）の重みとサンプル画像を飛ばす"

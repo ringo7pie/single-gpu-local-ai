@@ -77,6 +77,7 @@ Strata Swift 1.5（`strata-swift`）・Hunyuan3D（`hunyuan3d`）・Pixal3D（`p
 | 成功・失敗にかかわらず | 500 を返さず、常に `{"ok": bool, "message": str, "state": str}` を JSON で返す。他のサービスを止めたときは `stopped`、Strata（`strata`・`strata-coder`・`strata-official`・`strata-official-iq3s`・`strata-swift`）の起動で Ollama のモデルを降ろす処理をしたときは `unloaded_models` も入る（下記） |
 | `start` のタイムアウト | 30 秒（`systemctl start --no-block` で待たずに返る。Strata のように「API が応答するまで戻らない」ユニットでも、起動中の表示のまま成功で返る） |
 | `stop` のタイムアウト | 90 秒（Hunyuan3D・Pixal3D は終了に時間がかかることがある） |
+| `?wait=<秒>`（start のみ） | 0〜1800 の整数。付けると、ポートが応答する（`state` が `running`）まで待ってから返し、応答に `ready`・`waited_sec` が入る。起動から 10 秒過ぎても停止中なら起動失敗として `ok: false`。待ち時間が尽きたら `ok: true`・`ready: false`。範囲外は 400 |
 
 **認証は無い。LAN 内から誰でも起動・停止を呼べる。** LAN の外には公開していない前提での割り切り。
 そのうえで、次の 2 つで被害の範囲を絞っている。
@@ -93,6 +94,34 @@ curl から叩くときはヘッダを付ける:
 ```bash
 curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/service/hunyuan3d/start
 curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/service/hunyuan3d/stop
+```
+
+## 他の PC から全ての AI を操作する API（2026-11-25 追加）
+
+入口ページの API だけで、他の PC から 12 のサービスと Ollama のモデルを起動・停止できる。Ollama（11434）は LAN に
+公開していないので、Ollama のモデルの読み込み・解放もここを通す。
+
+| メソッドとパス | 内容 |
+|---|---|
+| `GET /api` | この API の一覧。エンドポイント、サービスごとの key・名前・URL（`Host` ヘッダのホスト名で組み立てる）・GPU の排他か・起動前に Ollama を降ろすか・切り替えられる設定、curl の例 |
+| `GET /api/status` | GPU・RAM・Ollama・各サービスの状態（既存） |
+| `POST /api/service/<key>/start?wait=<秒>` | 起動して、使える状態になるまで待つ（上の表） |
+| `GET /api/ollama` | `{"reachable", "installed": [モデル名], "loaded": [{"name", "size_vram_mib"}]}` |
+| `POST /api/ollama/<model>/load?keep_alive=<長さ>` | モデルを VRAM に載せ、載せ終わるまで待つ（初回は約 60 秒。上限 300 秒）。**GPU の排他グループで動いているサービスを先に止める**（Qwen 27B は 22 GiB 使い、同居できないため。停止に失敗したら読み込まない）。`keep_alive` は秒の整数・`30m`・`2h`・`-1`（無期限）。無指定は Ollama の既定 5 分。0 は 400 |
+| `POST /api/ollama/<model>/unload` | モデルを VRAM から降ろす。載っていなければ何もせず `ok: true` |
+
+- POST はどれも `X-Portal-Request: 1` が要る（無ければ 403）。
+- `<model>` は Ollama の `/api/tags` にあるものだけ受け付ける（無ければ 404 で `installed` を返す。知らない名前で Ollama を叩かせない）。
+  タグを省くと `:latest` とみなす。`hf.co/…` のように `/` を含む名前も、最後の `/` で action と分ける。
+- Ollama に接続できないときは 503。読み込みに失敗したときは 200 で `ok: false` と理由を返す。
+- `wait` や `load` は長く待つので、呼ぶ側の HTTP のタイムアウトを長くする（curl なら `--max-time` を `wait` より長く）。
+
+```bash
+curl http://<server-ip>:8080/api                                     # 一覧
+curl -X POST -H "X-Portal-Request: 1" --max-time 960 "http://<server-ip>:8080/api/service/strata/start?wait=900"
+curl http://<server-ip>:8080/api/ollama
+curl -X POST -H "X-Portal-Request: 1" --max-time 320 "http://<server-ip>:8080/api/ollama/qwen3.8:27b/load?keep_alive=30m"
+curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/ollama/qwen3.8:27b/unload
 ```
 
 ## GPU の排他（Hunyuan3D ⇔ Pixal3D ⇔ ComfyUI ⇔ AudioCraft ⇔ Qwen3-TTS ⇔ Strata ⇔ Strata Flash-Next Coder ⇔ Strata 公式版）

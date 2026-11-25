@@ -1193,6 +1193,7 @@ def test_patches_target_expected_files() -> None:
         "wtivo-src-core-vertices-lifetime.patch": {"native/core/wtivo_core.cpp"},
         "wtivo-node-allow-linux.patch": {"wtivo.py"},
         "cumesh-eigen-include.patch": {"setup.py"},
+        "layerdiffuse-join-alpha-v3.patch": {"layered_diffusion.py"},
     }
     for patch_name, files in expected.items():
         text = (TOOL_DIR / "patches" / patch_name).read_text(encoding="utf-8")
@@ -1572,3 +1573,94 @@ def test_wait_gpu_idle_allow_matches_command_line(tmp_path: Path) -> None:
     finally:
         resident.kill()
         resident.wait()
+
+
+# ---- ゲームのエフェクト（VFX。2026-11-25 追加）
+
+from cfui import vfx_workflows  # noqa: E402
+from cfui.cli import selected_vfx_entries  # noqa: E402
+
+LAYERDIFFUSE_EXAMPLE_PATH = (
+    config.CUSTOM_NODES_DIR / "ComfyUI-layerdiffuse" / "example_workflows" / vfx_workflows.LAYERDIFFUSE_EXAMPLE_FILE
+)
+
+
+def test_vfx_model_files_are_well_formed() -> None:
+    names = set()
+    for group, subdir, file_name, repo, path_in_repo, size, sha in config.VFX_MODEL_FILES:
+        assert group in config.VFX_MODEL_GROUPS, file_name
+        assert subdir and repo and path_in_repo.endswith(file_name.split("/")[-1])
+        assert size > 0 and re.fullmatch(r"[0-9a-f]{64}", sha), file_name
+        assert file_name not in names
+        names.add(file_name)
+    assert {entry[0] for entry in config.VFX_MODEL_FILES} == set(config.VFX_MODEL_GROUPS)
+    # 動画（--video）とは別の一覧で、同じファイルを二重に持たない
+    assert not names & {entry[2] for entry in config.VIDEO_MODEL_FILES}
+
+
+def test_selected_vfx_entries() -> None:
+    assert selected_vfx_entries(False, None) == []
+    assert len(selected_vfx_entries(True, None)) == len(config.VFX_MODEL_FILES)
+    only = selected_vfx_entries(False, ["layerdiffuse"])
+    assert only and all(entry[0] == "layerdiffuse" for entry in only)
+
+
+def _vfx_template() -> dict:
+    from adapt_video_workflows import find_template
+
+    path = find_template(vfx_workflows.WAN_TEMPLATE_FILE)
+    if path is None:
+        pytest.skip("同梱テンプレートが無い（venv が無い）")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _nodes(workflow: dict) -> dict[int, dict]:
+    return {node["id"]: node for node in workflow["nodes"]}
+
+
+def test_make_wan_alpha_from_real_template() -> None:
+    template = _vfx_template()
+    adapted = vfx_workflows.make_wan_alpha(template)
+    nodes = _nodes(adapted)
+    assert nodes[6]["widgets_values"] == [vfx_workflows.WAN_PROMPT]
+    assert nodes[40]["widgets_values"] == [832, 480, 81, 1]
+    assert nodes[3]["widgets_values"][:4] == [42, "fixed", 4, 1.0]
+    assert nodes[59]["mode"] == 0  # LightX2V の LoRA を有効にする
+    assert nodes[80]["widgets_values"][0] == "dq_vfx_trial/wan_alpha"
+    save = nodes[vfx_workflows.WAN_PNG_SAVE_ID]
+    assert save["type"] == "SaveImage" and save["widgets_values"] == ["dq_vfx_trial/wan_alpha_png"]
+    link_id = save["inputs"][0]["link"]
+    assert [link_id, 86, 0, vfx_workflows.WAN_PNG_SAVE_ID, 0, "IMAGE"] in adapted["links"]
+    assert link_id in nodes[86]["outputs"][0]["links"] and adapted["last_link_id"] == link_id
+    # 何度当てても同じ。土台は書き換えない
+    assert vfx_workflows.make_wan_alpha(adapted) == adapted
+    assert _nodes(template)[59]["mode"] == 4
+
+
+def test_make_layerdiffuse_from_real_example() -> None:
+    if not LAYERDIFFUSE_EXAMPLE_PATH.is_file():
+        pytest.skip("ComfyUI-layerdiffuse が無い")
+    example = json.loads(LAYERDIFFUSE_EXAMPLE_PATH.read_text(encoding="utf-8"))
+    adapted = vfx_workflows.make_layerdiffuse(example)
+    nodes = _nodes(adapted)
+    assert nodes[4]["widgets_values"] == ["sd_xl_base_1.0.safetensors"]
+    assert nodes[5]["widgets_values"] == [1024, 1024, 1]
+    assert nodes[3]["widgets_values"][:4] == [42, "fixed", 20, 7.0]
+    assert nodes[13]["widgets_values"] == ["SDXL, Conv Injection", 1]
+    assert nodes[36]["widgets_values"][0] == "SDXL"
+    assert nodes[27]["type"] == "SaveImage" and nodes[27]["widgets_values"] == ["dq_vfx_trial/layerdiffuse"]
+    assert vfx_workflows.make_layerdiffuse(adapted) == adapted
+
+
+def test_make_wan_alpha_rejects_changed_template() -> None:
+    template = _vfx_template()
+    broken = copy.deepcopy(template)
+    broken["nodes"] = [node for node in broken["nodes"] if node["id"] != 59]
+    with pytest.raises(workflows.WorkflowFormatError):
+        vfx_workflows.make_wan_alpha(broken)
+
+
+def test_setup_installs_layerdiffuse_requirements() -> None:
+    text = (TOOL_DIR / "requirements.in").read_text(encoding="utf-8")
+    assert "-r vendor/ComfyUI/custom_nodes/ComfyUI-layerdiffuse/requirements.txt" in text
+    assert re.search(r"^diffusers==", (TOOL_DIR / "requirements.lock.txt").read_text(encoding="utf-8"), re.M)
