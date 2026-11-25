@@ -31,6 +31,7 @@
 | `localai_tts` | Qwen3-TTS VoiceDesign。声の特徴を文章（`design`）で指定して `text` を読み上げ |
 | `localai_mesh` | Hunyuan3D / Pixal3D。正面（必須）・背面・左・右の画像から 3D メッシュ |
 | `localai_comfyui` / `localai_comfyui_result` | ComfyUI に API 形式のワークフローを投入し、出力を受け取る（長いものは `wait=false` で投げて後で受け取る）。`workflow_name` でサーバーに保存したワークフローを名前で使える（例 `VFX/WanAlpha_T2V_api.json`。入力の対応は入口ページの `GET /api` の `comfyui.workflows`） |
+| `localai_vfx` | ゲームのエフェクト。`kind=wan_alpha`（透明度つきの動画。RGBA の PNG の連番とアニメ WebP）か `kind=layerdiffuse`（透明な 1 枚絵。RGBA の PNG）に、`prompt`・`seed`・`steps`・`cfg`・`width`・`height`・`frames`（wan_alpha だけ）・`filename_prefix` を名前で渡す。ComfyUI が止まっていれば `start=true` で起動する（GPU のほかのサービスが動いていれば `stop_others=true` が要る）。入力の対応は入口ページの `GET /api` の `comfyui.workflows` から読む |
 | `localai_gradio_info` / `localai_gradio_call` | Gradio のサービスの API を名前で呼ぶ汎用の口（専用ツールに無い機能・細かい設定用） |
 
 Open WebUI はブラウザの画面なので、起動・停止だけ。Ollama（11434）は LAN に出していないので、この MCP からできるのは `localai_ollama` での読み込み・解放まで。
@@ -46,8 +47,37 @@ A30 は 1 枚で、GPU を使うサービス（Strata 5 種・Hunyuan3D・Pixal3
 
 ## 他の PC への導入
 
-`tools/localai-mcp/` をサーバーの共有（`\\<server-ip>\<user>\Proj\localai\tools\localai-mcp\`）か clone から取り、1 回実行する。
-何度実行してもよい（登録を新しい値で入れ直す）。`localai_mcp.py` は写して使うので、新しい版（0.2.0 で `localai_ollama` と入口ページの `?wait=` を追加）にするときも再実行する。
+**Windows でいちばん簡単なのは、入口ページ（`http://<server-ip>:8080/`）の「他の PC から使う」の欄から `install-localai-mcp.cmd` をダウンロードしてダブルクリックすること**（入口ページがサーバーの住所を書き込んで作る。中身は下の PowerShell 用の 3 行と同じことをする）。
+
+コマンドで入れるなら、入口ページ（8080）から台本を取って流す（リポジトリも共有も要らない。2026-11-25 から）。
+台本は `localai_mcp.py` も入口ページ（`GET /remote/localai_mcp.py`）から取る。同じコマンドで更新もできる。終わったら Claude Code を開き直す。
+
+```powershell
+# Windows の PowerShell に貼る（入れ子の powershell -c にしない。外側が "..." の中の $ を展開して壊すため）
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest -UseBasicParsing http://<server-ip>:8080/remote/setup-remote.ps1 -OutFile $env:TEMP\setup-remote.ps1
+powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-remote.ps1 -ServerIp <server-ip>
+```
+
+```bat
+rem Windows の cmd に貼る
+powershell -ExecutionPolicy Bypass -c "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing http://<server-ip>:8080/remote/setup-remote.ps1 -OutFile $env:TEMP\setup-remote.ps1; & $env:TEMP\setup-remote.ps1 -ServerIp <server-ip>"
+```
+
+`$ProgressPreference` を切るのは、Windows PowerShell 5.1 が Invoke-WebRequest / irm の進捗バーの描画で
+`out-lineoutput : インデックスが配列の境界外です`（IndexOutOfRangeException）と落ちることがあるため（2026-11-25 に他の PC で、
+入れ子の powershell から irm したときに出た）。
+
+```bash
+# Linux / macOS
+curl -fsSL http://<server-ip>:8080/remote/setup-remote.sh | bash -s -- <server-ip>
+```
+
+同じコマンドは入口ページの `GET /api` の `mcp`（`install_windows` が PowerShell 用、`install_windows_cmd` が cmd 用）にもある。
+
+リポジトリがあるときは、`tools/localai-mcp/` をサーバーの共有（`\\<server-ip>\<user>\Proj\localai\tools\localai-mcp\`）か clone から取り、1 回実行してもよい。
+何度実行してもよい（登録を新しい値で入れ直す）。`localai_mcp.py` は写して使うので、新しい版（0.2.0 で `localai_ollama` と入口ページの `?wait=`、
+0.3.0 で `localai_vfx` と `localai_comfyui` の `workflow_name` を追加）にするときも再実行する。
 
 ```bash
 # Linux / macOS
@@ -61,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File tools\localai-mcp\remote\setup-remote.p
 
 やること:
 
-1. `localai_mcp.py` を `~/.local/share/localai-mcp/`（Windows は `%LOCALAPPDATA%\localai-mcp\`）に写す
+1. `localai_mcp.py` を `~/.local/share/localai-mcp/`（Windows は `%LOCALAPPDATA%\localai-mcp\`）に写す（台本の隣に無ければ入口ページから取る）
 2. 起動に使う Python を決める（3.10 以上の `python3` / `py -3` / `python`、無ければ `uv run --no-project --python 3.12`）
 3. `claude` があれば `claude mcp add -s user localai -e LOCALAI_SERVER=<ip> -- …`、`codex` があれば `codex mcp add localai --env LOCALAI_SERVER=<ip> -- …`。
    生成は数分〜30 分かかるので、Claude Code は `~/.claude/settings.json` の `env` に `MCP_TOOL_TIMEOUT=2100000`、Codex は `[mcp_servers.localai]` に `tool_timeout_sec = 2100` を足す（既に長ければ触らない）
@@ -95,6 +125,8 @@ sudo ufw status numbered
 - 「audiocraft を起動して（Stable Audio は止めてよい）。hum.wav のメロディで 20 秒のピアノ曲を作って」
 - 「pixal3d で front.png・left.png・right.png・back.png から 3D を作って」
 - 「comfyui で workflows/api.json を投げて、10 番の画像に input.png を入れて」
+- 「localai_vfx で、紫の魔法の霧の透明な動画を 832x480・81 コマで作って（ComfyUI は起動してよい）」
+- 「layerdiffuse で、オレンジの火花の透明なスプライトを seed を変えて 4 枚作って」
 - 「Ollama に入っているモデルを見せて」「qwen3.8:27b を 30 分載せておいて（Strata は止めてよい）」
 
 ## 試験

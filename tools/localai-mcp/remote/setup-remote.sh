@@ -6,7 +6,9 @@
 #   サーバーの IP は環境変数 LOCALAI_SERVER でも指定できる。
 #
 # やること（何度実行してもよい。2 回目以降は登録を新しい値で入れ直す）:
-#   1. localai_mcp.py を ~/.local/share/localai-mcp/ に写す（サーバーの共有が外れても動くように）
+#   1. localai_mcp.py を ~/.local/share/localai-mcp/ に写す（サーバーの共有が外れても動くように）。
+#      このファイルの隣（../localai_mcp.py）に無ければ、入口ページ（http://<サーバー>:8080/remote/localai_mcp.py）から取る。
+#      入口ページから直接流す例: curl -fsSL http://<サーバー>:8080/remote/setup-remote.sh | bash -s -- <サーバー>
 #   2. 起動に使う Python を決める（python3 が 3.10 以上ならそれ、無ければ uv run --python 3.12）
 #   3. claude / codex があれば MCP「localai」として登録し、タイムアウトを長くする
 #   4. 疎通確認: 入口ページ（8080）と、稼働中のサービスのポートに届くか
@@ -26,19 +28,26 @@ if [ -z "$server" ]; then
   exit 2
 fi
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
 source_file="$script_dir/../localai_mcp.py"
 install_dir="${LOCALAI_MCP_HOME:-$HOME/.local/share/localai-mcp}"
 target_file="$install_dir/localai_mcp.py"
 
-# 1. 写す
-if [ ! -f "$source_file" ]; then
-  echo "localai_mcp.py が見つかりません: $source_file（tools/localai-mcp/remote/ から実行してください）" >&2
-  exit 1
-fi
+# 1. 写す（隣に無ければ入口ページから取る）
 mkdir -p "$install_dir"
-cp "$source_file" "$target_file"
-echo "[1/4] $target_file に写しました。"
+if [ -f "$source_file" ]; then
+  cp "$source_file" "$target_file"
+  echo "[1/4] $target_file に写しました。"
+else
+  remote_url="http://$server:${LOCALAI_PORTAL_PORT:-8080}/remote/localai_mcp.py"
+  if ! curl -fsSL --max-time 60 -o "$target_file.part" "$remote_url"; then
+    echo "localai_mcp.py を取れません: $remote_url（入口ページが動いているか、IP が正しいかを確かめてください）" >&2
+    rm -f "$target_file.part"
+    exit 1
+  fi
+  mv "$target_file.part" "$target_file"
+  echo "[1/4] $remote_url から $target_file に取りました。"
+fi
 
 # 2. Python
 python_ok() {
@@ -121,7 +130,9 @@ if [ "$skip_check" -eq 1 ]; then
 fi
 echo "[4/4] 疎通確認:"
 if LOCALAI_SERVER="$server" "${launcher[@]}" --check; then
-  echo "完了。Claude Code / Codex を開き直すと localai のツール（localai_status など）が使えます。"
+  echo "完了。Claude Code / Codex を開き直してください。"
+  echo "  確かめ方: Claude Code で /mcp と打ち、localai が connected になっていること（ターミナルなら claude mcp list）。"
+  echo "  使い方: ツールはスラッシュコマンドには出ません。「localai の状態を見て」「localai_vfx で透明な火花のスプライトを作って」のように文で頼みます。"
 else
   echo "届かないものがあります。上の NG の行を見てください（サーバーの ufw・サービスの起動）。登録は済んでいます。"
   exit 1

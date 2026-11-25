@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 SERVER_NAME = "localai"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 DEFAULT_PORTAL_PORT = 8080
@@ -1077,6 +1077,72 @@ def tool_comfyui(args: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+# localai_vfx: ゲームのエフェクト（Wan 2.1 Alpha / LayerDiffuse）を名前付きの引数で作る。入力の対応（どのノードのどの入力か）は
+# 入口ページの GET /api の comfyui.workflows から読む（サーバー側の tools/portal/portal.py の COMFYUI_API_WORKFLOWS が正本）。
+VFX_KINDS = {
+    "wan_alpha": {"workflow": "VFX/WanAlpha_T2V_api.json", "size_multiple": 16, "frames": True},
+    "layerdiffuse": {"workflow": "VFX/LayerDiffuse_SDXL_RGBA_api.json", "size_multiple": 64, "frames": False},
+}
+VFX_VALUE_ARGS = ("prompt", "negative_prompt", "seed", "steps", "cfg", "width", "height", "frames")
+
+
+def vfx_overrides(kind: str, inputs_map: dict[str, str], args: dict[str, Any]) -> dict[str, Any]:
+    """名前付きの引数を {"ノード.入力": 値} に直す（純粋関数）。大きさ・コマ数の決まりもここで確かめる。"""
+    spec = VFX_KINDS[kind]
+    overrides: dict[str, Any] = {}
+    for name in VFX_VALUE_ARGS:
+        value = args.get(name)
+        if value is None:
+            continue
+        if name == "frames" and not spec["frames"]:
+            raise ToolError("frames は wan_alpha だけで使えます（layerdiffuse は 1 枚絵）。")
+        if name in ("width", "height") and (int(value) <= 0 or int(value) % spec["size_multiple"]):
+            raise ToolError(f"{kind} の {name} は {spec['size_multiple']} の倍数にしてください（{value}）。")
+        if name == "frames" and (int(value) < 1 or (int(value) - 1) % 4):
+            raise ToolError(f"frames は 4 の倍数 + 1 にしてください（例 49・81。指定は {value}）。")
+        target = inputs_map.get(name)
+        if not target:
+            raise ToolError(f"サーバーのワークフローに {name} の入力の対応がありません（GET /api の comfyui.workflows）。")
+        overrides[target] = int(value) if name in ("seed", "steps", "width", "height", "frames") else (
+            float(value) if name == "cfg" else str(value))
+    prefix = args.get("filename_prefix")
+    if prefix:
+        if "/" in str(prefix).strip("/") or ".." in str(prefix):
+            raise ToolError("filename_prefix は名前だけにしてください（dq_vfx_trial/ の下に置きます）。")
+        for key in ("png_filename_prefix", "filename_prefix"):
+            if key in inputs_map:
+                overrides[inputs_map[key]] = f"dq_vfx_trial/{prefix}"
+        if "webp_filename_prefix" in inputs_map:
+            overrides[inputs_map["webp_filename_prefix"]] = f"dq_vfx_trial/{prefix}_webp"
+    return overrides
+
+
+def tool_vfx(args: dict[str, Any]) -> dict[str, Any]:
+    kind = str(args.get("kind") or "").strip()
+    if kind not in VFX_KINDS:
+        raise ToolError(f"kind は {' か '.join(VFX_KINDS)} です。")
+    if not str(args.get("prompt") or "").strip():
+        raise ToolError("prompt が要ります（英語。透明な背景の素材なら、背景が無いことも書く）。")
+    workflow_name = VFX_KINDS[kind]["workflow"]
+    response = http_json("GET", f"{portal_url()}/api", timeout=30.0)
+    catalog = response.json() if response.status == 200 else {}
+    entries = {item.get("name"): item for item in ((catalog.get("comfyui") or {}).get("workflows") or []) if isinstance(item, dict)}
+    if workflow_name not in entries:
+        raise ToolError(f"入口ページの GET /api に {workflow_name} がありません。サーバーの入口ページが古い可能性があります。")
+    overrides = vfx_overrides(kind, entries[workflow_name].get("inputs") or {}, args)
+
+    if args.get("start"):
+        started = tool_service({"key": "comfyui", "action": "start", "stop_others": bool(args.get("stop_others", False)),
+                                "timeout_sec": 900})
+        if not started.get("ok"):
+            return {"kind": kind, "status": "not_started", "start": started}
+    result = tool_comfyui({
+        "workflow_name": workflow_name, "set": overrides, "wait": args.get("wait", True),
+        "timeout_sec": args.get("timeout_sec") or 1800, "output_dir": args.get("output_dir"),
+    })
+    return {"kind": kind, "workflow_name": workflow_name, **result}
+
+
 def tool_comfyui_result(args: dict[str, Any]) -> dict[str, Any]:
     prompt_id = str(args.get("prompt_id") or "").strip()
     if not prompt_id:
@@ -1244,6 +1310,32 @@ TOOLS: list[dict[str, Any]] = [
             "output_dir": OUTPUT_DIR_PROP, "timeout_sec": {"type": "number", "description": "既定 1800"},
         }),
         "handler": tool_comfyui,
+    },
+    {
+        "name": "localai_vfx",
+        "description": (
+            "ゲームのエフェクトを作る。kind=wan_alpha は透明度つきの動画（Wan 2.1 Alpha。RGBA の PNG の連番とアニメ WebP、"
+            "832x480・81 コマで約 2 分）、kind=layerdiffuse は透明な 1 枚絵（SDXL + LayerDiffuse。RGBA の PNG、1024x1024 で約 10 秒）。"
+            "出力はこの PC に保存する。ComfyUI が止まっていれば start=true で起動する（GPU を使うほかのサービスが動いていれば、"
+            "stop_others=true が無い限り起動しない）。wan_alpha は長いので wait=false で投げて localai_comfyui_result で受け取ってもよい。"
+        ),
+        "inputSchema": _schema({
+            "kind": {"type": "string", "enum": list(VFX_KINDS)},
+            "prompt": {"type": "string", "description": "英語。例 a swirling cloud of glowing violet magic mist, centered, no background"},
+            "negative_prompt": {"type": "string"},
+            "seed": {"type": "integer", "description": "既定 42（色や形はシードで大きく変わる）"},
+            "steps": {"type": "integer", "description": "既定 wan_alpha 4（LightX2V）・layerdiffuse 20"},
+            "cfg": {"type": "number", "description": "既定 wan_alpha 1.0・layerdiffuse 7"},
+            "width": {"type": "integer", "description": "wan_alpha は 16 の倍数（既定 832）、layerdiffuse は 64 の倍数（既定 1024）"},
+            "height": {"type": "integer", "description": "wan_alpha 既定 480、layerdiffuse 既定 1024"},
+            "frames": {"type": "integer", "description": "wan_alpha だけ。4 の倍数 + 1（既定 81 = 16 fps で約 5 秒）"},
+            "filename_prefix": {"type": "string", "description": "サーバーの output/dq_vfx_trial/ の下のファイル名の頭"},
+            "start": {"type": "boolean", "description": "ComfyUI が止まっていれば起動する（既定 false）"},
+            "stop_others": {"type": "boolean", "description": "start のとき、GPU を使うほかのサービスを止めてよいか（既定 false）"},
+            "wait": {"type": "boolean"}, "output_dir": OUTPUT_DIR_PROP,
+            "timeout_sec": {"type": "number", "description": "既定 1800"},
+        }, ["kind", "prompt"]),
+        "handler": tool_vfx,
     },
     {
         "name": "localai_comfyui_result",

@@ -370,6 +370,21 @@
     display: block;
     margin-left: auto;
   }
+  /* 他の PC から使う（localai-mcp の導入）。2026-11-25 追加 */
+  #remote-install h2 { margin: 0 0 6px; font-size: 1.05rem; }
+  #remote-install ol { margin: 8px 0; padding-left: 1.4em; font-size: 0.9rem; }
+  #remote-install pre {
+    margin: 4px 0 10px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #remote-install a.card-button { display: inline-block; text-decoration: none; margin: 4px 0 6px; }
+  #remote-install summary { cursor: pointer; font-size: 0.9rem; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -396,6 +411,29 @@
   </section>
 
   <div id="cards"></div>
+
+  <section class="panel" id="remote-install">
+    <h2>他の PC から使う（Claude Code / Codex の MCP）</h2>
+    <p class="card-desc">他の PC の Claude Code / Codex に MCP「localai」を入れると、このサーバーの AI の起動・停止と生成
+      （音楽・効果音・音声・3D・ComfyUI・ゲームのエフェクト localai_vfx）を頼めます。同じ手順で更新もできます。
+      Python 3.10 以上か uv が要ります（無ければ案内が出ます）。</p>
+    <ol>
+      <li>Windows: 下のボタンでインストーラーを取り、ダブルクリックする（「Windows によって PC が保護されました」と出たら「詳細情報」→「実行」）。</li>
+      <li>終わったら Claude Code / Codex を開き直し、<code>/mcp</code> で localai が connected になっていることを確かめる。</li>
+      <li>ツールはスラッシュコマンドには出ない。「localai の状態を見て」「localai_vfx で透明な火花のスプライトを作って」のように文で頼む。</li>
+    </ol>
+    <a class="card-button primary" href="/remote/install-localai-mcp.cmd" download="install-localai-mcp.cmd">Windows 用インストーラー（install-localai-mcp.cmd）をダウンロード</a>
+    <details>
+      <summary>コマンドで入れる（PowerShell・cmd・Linux / macOS）</summary>
+      <p class="card-desc">PowerShell に貼る（3 行）:</p>
+      <pre id="remote-cmd-powershell"></pre>
+      <p class="card-desc">cmd に貼る:</p>
+      <pre id="remote-cmd-cmd"></pre>
+      <p class="card-desc">Linux / macOS:</p>
+      <pre id="remote-cmd-sh"></pre>
+      <p class="card-desc">API の一覧は <a href="/api">/api</a>（JSON）、ゲームのエフェクトの使い方は <a href="/guides/vfx.html">guides/vfx.html</a>。</p>
+    </details>
+  </section>
 
   <footer>
     5 秒ごとに自動更新します。各サービスへのリンクはこのページを開いたホスト名を使って組み立てます。
@@ -1642,6 +1680,23 @@
 
   fetchStatus();
   setInterval(fetchStatus, 5000);
+</script>
+<script>
+  // 他の PC から使う欄のコマンドは、このページを開いたホスト名から作る（サーバーの IP を書かない）。
+  (function () {
+    const host = location.hostname;
+    const base = location.protocol + "//" + location.host;
+    const ps1 = base + "/remote/setup-remote.ps1";
+    document.getElementById("remote-cmd-powershell").textContent =
+      "$ProgressPreference = 'SilentlyContinue'\n" +
+      "Invoke-WebRequest -UseBasicParsing " + ps1 + " -OutFile $env:TEMP\\setup-remote.ps1\n" +
+      "powershell -ExecutionPolicy Bypass -File $env:TEMP\\setup-remote.ps1 -ServerIp " + host;
+    document.getElementById("remote-cmd-cmd").textContent =
+      "powershell -ExecutionPolicy Bypass -c \"$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing " + ps1 +
+      " -OutFile $env:TEMP\\setup-remote.ps1; & $env:TEMP\\setup-remote.ps1 -ServerIp " + host + "\"";
+    document.getElementById("remote-cmd-sh").textContent =
+      "curl -fsSL " + base + "/remote/setup-remote.sh | bash -s -- " + host;
+  })();
 </script>
 </body>
 </html>

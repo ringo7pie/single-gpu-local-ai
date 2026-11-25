@@ -3443,3 +3443,66 @@ def test_build_api_catalog_lists_comfyui_workflows():
         for target in workflow["inputs"].values():
             node_id, _, input_name = target.partition(".")
             assert node_id.isdigit() and input_name
+
+
+# --- 他の PC へ localai-mcp を配る（GET /remote/<名前>、2026-11-25） ---------------------------------
+
+
+def test_remote_files_exist_and_catalog_lists_install_commands():
+    for name, (file_path, _content_type) in portal.REMOTE_FILES.items():
+        assert file_path.is_file(), name
+    catalog = portal.build_api_catalog("192.168.1.10", 8080)["mcp"]
+    assert catalog["files"]["localai_mcp.py"] == "http://192.168.1.10:8080/remote/localai_mcp.py"
+    for key in ("install_windows", "install_windows_cmd"):
+        command = catalog[key]
+        assert "setup-remote.ps1 -ServerIp 192.168.1.10" in command and "\\\\" not in command
+        assert "$ProgressPreference" in command and "irm " not in command
+    # PowerShell に貼る形は入れ子にしない（外側の PowerShell が "..." の中の $ を展開して壊すため）
+    assert not catalog["install_windows"].startswith("powershell")
+    assert catalog["install_windows_cmd"].startswith('powershell -ExecutionPolicy Bypass -c "')
+    assert catalog["install_linux_mac"].endswith("setup-remote.sh | bash -s -- 192.168.1.10")
+
+
+def test_get_remote_serves_only_listed_files(running_server):
+    status, content_type, body = _get(running_server, "/remote/localai_mcp.py")
+    assert status == 200 and content_type.startswith("text/x-python")
+    assert body == portal.REMOTE_FILES["localai_mcp.py"][0].read_bytes()
+    for path in ("/remote/", "/remote/../portal.py", "/remote/%2e%2e/portal.py", "/remote/README.md", "/remote/tests/test_units.py"):
+        assert _get(running_server, path)[0] == 404, path
+
+
+def test_windows_installer_embeds_only_safe_host_names():
+    body = portal.build_windows_installer("192.168.1.10", 8080)
+    text = body.decode("ascii")
+    assert "\r\n" in text and text.startswith("@echo off\r\n")
+    assert "http://192.168.1.10:8080/remote/setup-remote.ps1" in text
+    assert "-File \"%PS1%\" -ServerIp 192.168.1.10" in text and "$ProgressPreference='SilentlyContinue'" in text
+    assert portal.build_windows_installer("server-1.lan", 8080) is not None
+    for bad in ("a&calc", 'a"b', "a b", "a|b", "<server-ip>", "[::1]", "", "a%TEMP%"):
+        assert portal.build_windows_installer(bad, 8080) is None, bad
+
+
+def test_get_windows_installer_is_attachment(running_server):
+    host, port = running_server.server_address
+    connection = http.client.HTTPConnection(host, port, timeout=5)
+    try:
+        connection.request("GET", "/remote/install-localai-mcp.cmd", headers={"Host": f"192.168.1.10:{port}"})
+        response = connection.getresponse()
+        body = response.read()
+        assert response.status == 200
+        assert "attachment" in response.getheader("Content-Disposition", "")
+        assert b"-ServerIp 192.168.1.10" in body
+        connection.request("GET", "/remote/install-localai-mcp.cmd", headers={"Host": "a&calc:8080"})
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 400
+    finally:
+        connection.close()
+
+
+def test_index_html_has_remote_install_panel():
+    html_text = _html_text()
+    assert 'id="remote-install"' in html_text
+    assert 'href="/remote/install-localai-mcp.cmd"' in html_text
+    for element_id in ("remote-cmd-powershell", "remote-cmd-cmd", "remote-cmd-sh"):
+        assert f'id="{element_id}"' in html_text

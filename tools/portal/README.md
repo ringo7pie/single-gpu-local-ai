@@ -124,6 +124,17 @@ curl -X POST -H "X-Portal-Request: 1" --max-time 320 "http://<server-ip>:8080/ap
 curl -X POST -H "X-Portal-Request: 1" http://<server-ip>:8080/api/ollama/qwen3.8:27b/unload
 ```
 
+## 他の PC に localai-mcp を配る（`GET /remote/<名前>`、2026-11-25 追加）
+
+入口ページの下の方の「他の PC から使う」の欄に、Windows 用のインストーラーのダウンロード（`GET /remote/install-localai-mcp.cmd`）と、
+PowerShell・cmd・Linux / macOS のコマンド（このページを開いたホスト名で組み立てる）を出す。`.cmd` は入口ページが Host ヘッダの
+ホスト名を書き込んで作る（ASCII・CRLF。ホスト名が英数字・点・ハイフンでなければ 400。cmd の記号を入れさせないため）。
+
+`GET /remote/localai_mcp.py`・`/remote/setup-remote.ps1`・`/remote/setup-remote.sh` は `tools/localai-mcp/` のファイルをそのまま返す
+（この 3 つだけ。名前で引くので、ほかのファイルは読めない）。他の PC はリポジトリが無くても、`GET /api` の `mcp.install_windows`（PowerShell 用）・
+`mcp.install_windows_cmd`（cmd 用）・`mcp.install_linux_mac` のコマンド 1 つで MCP を入れる・更新する。`GET /api` の `comfyui` には ComfyUI（8188）の HTTP API と、
+VFX のワークフロー（`VFX/WanAlpha_T2V_api.json`・`VFX/LayerDiffuse_SDXL_RGBA_api.json`）の入力の対応（`COMFYUI_API_WORKFLOWS`）がある。
+
 ## GPU の排他（Hunyuan3D ⇔ Pixal3D ⇔ ComfyUI ⇔ AudioCraft ⇔ Qwen3-TTS ⇔ Strata ⇔ Strata Flash-Next Coder ⇔ Strata 公式版）
 
 Hunyuan3D・Pixal3D はどちらも GPU（VRAM）を使う 3D メッシュ生成器で、ComfyUI も Pixal3D / TRELLIS.2 の

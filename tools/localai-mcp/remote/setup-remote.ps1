@@ -5,7 +5,12 @@
 #   -ServerIp は環境変数 LOCALAI_SERVER でも指定できる。
 #
 # やること（何度実行してもよい。2 回目以降は登録を新しい値で入れ直す）:
-#   1. localai_mcp.py を %LOCALAPPDATA%\localai-mcp\ に写す（サーバーの共有が外れても動くように）
+#   1. localai_mcp.py を %LOCALAPPDATA%\localai-mcp\ に写す（サーバーの共有が外れても動くように）。
+#      このファイルの隣（..\localai_mcp.py）に無ければ、入口ページ（http://<サーバー>:8080/remote/localai_mcp.py）から取る。
+#      入口ページから取って流す例（PowerShell で。進捗バーを切らないと 5.1 で落ちることがある）:
+#        $ProgressPreference = 'SilentlyContinue'
+#        Invoke-WebRequest -UseBasicParsing http://<サーバー>:8080/remote/setup-remote.ps1 -OutFile $env:TEMP\setup-remote.ps1
+#        powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-remote.ps1 -ServerIp <サーバー>
 #   2. 起動に使う Python を決める（py -3 / python が 3.10 以上ならそれ、無ければ uv run --python 3.12）
 #   3. claude / codex があれば MCP「localai」として登録し、タイムアウトを長くする
 #   4. 疎通確認: 入口ページ（8080）と、稼働中のサービスのポートに届くか
@@ -17,6 +22,9 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 は Invoke-WebRequest の進捗バーの描画で「out-lineoutput : インデックスが配列の境界外です」と落ちることがある
+# （入れ子の powershell から動かしたときに 2026-11-25 に他の PC で出た）。進捗バーを出さない。
+$ProgressPreference = "SilentlyContinue"
 if ([string]::IsNullOrWhiteSpace($ServerIp)) {
     Write-Error "サーバーの IP が未指定です。-ServerIp か環境変数 LOCALAI_SERVER で指定してください（例: -ServerIp 192.168.1.10）。" -ErrorAction Continue
     exit 2
@@ -26,14 +34,23 @@ $sourceFile = Join-Path (Split-Path -Parent $PSCommandPath) "..\localai_mcp.py"
 $installDir = if ($env:LOCALAI_MCP_HOME) { $env:LOCALAI_MCP_HOME } else { Join-Path $env:LOCALAPPDATA "localai-mcp" }
 $targetFile = Join-Path $installDir "localai_mcp.py"
 
-# 1. 写す
-if (-not (Test-Path $sourceFile)) {
-    Write-Error "localai_mcp.py が見つかりません: $sourceFile（tools\localai-mcp\remote\ から実行してください）" -ErrorAction Continue
-    exit 1
-}
+# 1. 写す（隣に無ければ入口ページから取る）
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-Copy-Item -Force $sourceFile $targetFile
-Write-Output "[1/4] $targetFile に写しました。"
+if (Test-Path $sourceFile) {
+    Copy-Item -Force $sourceFile $targetFile
+    Write-Output "[1/4] $targetFile に写しました。"
+} else {
+    $portalPort = if ($env:LOCALAI_PORTAL_PORT) { $env:LOCALAI_PORTAL_PORT } else { "8080" }
+    $remoteUrl = "http://${ServerIp}:${portalPort}/remote/localai_mcp.py"
+    try {
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 60 -Uri $remoteUrl -OutFile "$targetFile.part"
+    } catch {
+        Write-Error "localai_mcp.py を取れません: $remoteUrl（入口ページが動いているか、IP が正しいかを確かめてください）: $_" -ErrorAction Continue
+        exit 1
+    }
+    Move-Item -Force "$targetFile.part" $targetFile
+    Write-Output "[1/4] $remoteUrl から $targetFile に取りました。"
+}
 
 # 2. Python（3.10 以上の実体のパスを取る。WindowsApps の python.exe は Store を開くだけの偽物のことがあるので、実際に動かして確かめる）
 function Get-PythonExe {
@@ -150,7 +167,9 @@ $checkArgs = @()
 if ($launcher.Length -gt 1) { $checkArgs = $launcher[1..($launcher.Length - 1)] }
 & $checkExe @checkArgs --check
 if ($LASTEXITCODE -eq 0) {
-    Write-Output "完了。Claude Code / Codex を開き直すと localai のツール（localai_status など）が使えます。"
+    Write-Output "完了。Claude Code / Codex を開き直してください。"
+    Write-Output "  確かめ方: Claude Code で /mcp と打ち、localai が connected になっていること（ターミナルなら claude mcp list）。"
+    Write-Output "  使い方: ツールはスラッシュコマンドには出ません。「localai の状態を見て」「localai_vfx で透明な火花のスプライトを作って」のように文で頼みます。"
 } else {
     Write-Output "届かないものがあります。上の NG の行を見てください（サーバーの ufw・サービスの起動）。登録は済んでいます。"
     exit 1

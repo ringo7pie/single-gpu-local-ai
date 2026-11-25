@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import runpy
 import sys
 from pathlib import Path
@@ -35,8 +36,16 @@ from wan.modules import lightx2v_lora_adapter, model_dora_lightx2v  # noqa: E402
 WanModel = model_dora_lightx2v.WanModel_dora_lightx2v
 
 
+# 1 なら INT8 の重みを pinned の CPU メモリに置き、Linear ごとに GPU へ送る（81 コマでは DiT 14 GB と作業領域が 24 GB に収まらない）。
+STREAM_WEIGHTS = os.environ.get("WAN_INT8_STREAM", "1") == "1"
+
+
 class Int8Linear(nn.Module):
-    """重みを int8（出力チャネルごとの scale）で持ち、forward のたびに入力の型へ戻して F.linear する。"""
+    """重みを int8（出力チャネルごとの scale）で持ち、forward のたびに入力の型へ戻して F.linear する。
+
+    STREAM_WEIGHTS のときは int8 の重みを buffer にせず（model.to(device) で GPU へ移らないように）pinned の CPU に置き、
+    forward のたびに GPU へ送る。scale と bias は小さいので buffer のまま GPU に置く。
+    """
 
     def __init__(self, linear: nn.Linear, device: torch.device) -> None:
         super().__init__()
@@ -44,14 +53,25 @@ class Int8Linear(nn.Module):
         self.out_features = linear.out_features
         weight = linear.weight.detach().to(device=device, dtype=torch.float32)
         scale = weight.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / 127.0
-        self.register_buffer("weight_int8", torch.round(weight / scale).clamp(-127, 127).to(torch.int8))
+        quantized = torch.round(weight / scale).clamp(-127, 127).to(torch.int8)
+        del weight
+        if STREAM_WEIGHTS:
+            self.weight_int8_cpu = quantized.cpu().pin_memory()
+            self.weight_int8 = None
+        else:
+            self.register_buffer("weight_int8", quantized)
         self.register_buffer("weight_scale", scale.to(torch.bfloat16))
         bias = linear.bias.detach().to(device=device, dtype=torch.bfloat16) if linear.bias is not None else None
         self.register_buffer("bias", bias)
 
+    def int8_numel(self) -> int:
+        return (self.weight_int8_cpu if self.weight_int8 is None else self.weight_int8).numel()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         compute_dtype = torch.bfloat16 if x.dtype == torch.float32 and torch.is_autocast_enabled() else x.dtype
-        weight = self.weight_int8.to(compute_dtype) * self.weight_scale.to(compute_dtype)
+        weight_int8 = self.weight_int8 if self.weight_int8 is not None else self.weight_int8_cpu.to(x.device, non_blocking=True)
+        weight = weight_int8.to(compute_dtype) * self.weight_scale.to(compute_dtype)
+        del weight_int8
         bias = self.bias.to(compute_dtype) if self.bias is not None else None
         return F.linear(x.to(compute_dtype), weight, bias)
 
@@ -66,7 +86,7 @@ def quantize_blocks(model: nn.Module, device: torch.device) -> tuple[int, int]:
                 if isinstance(child, nn.Linear):
                     quantized = Int8Linear(child, device)
                     setattr(parent, child_name, quantized)
-                    int8_bytes += quantized.weight_int8.numel()
+                    int8_bytes += quantized.int8_numel()
                     replaced += 1
                     del child
     return replaced, int8_bytes
@@ -154,6 +174,7 @@ def load_lightx2v_inplace_and_quantize(self, lora_path: str) -> None:
     torch.cuda.empty_cache()
     logging.info(
         f"INT8 にしました: Linear {replaced} 個、int8 の重み {int8_bytes / 1024 ** 3:.2f} GiB"
+        f"（{'pinned の CPU に置き、使うたびに GPU へ送る' if STREAM_WEIGHTS else 'GPU に置く'}）"
         f"（GPU の使用 {torch.cuda.memory_allocated() / 1024 ** 3:.2f} GiB）"
     )
 

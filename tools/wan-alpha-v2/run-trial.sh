@@ -11,6 +11,7 @@ OUT="$HERE/output/$TAG"
 PROMPT="${WAN_ALPHA_PROMPT:-a swirling cloud of glowing violet magic mist, soft wisps, centered, no background}"
 LIGHTX2V="${LIGHTX2V_PATH:-$HERE/../comfyui/vendor/ComfyUI/models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank64_bf16.safetensors}"
 mkdir -p "$OUT"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 printf '%s\n' "$PROMPT" > "$OUT/prompt.txt"
 nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -l 1 > "$OUT/vram.csv" &
 SMI_PID=$!

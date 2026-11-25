@@ -4,4 +4,3 @@
 終了したら `/archive-work <id>` を使う。この行を手で消さない。
 
 - audiocraft-portal — 音楽・効果音生成（AudioCraft: MusicGen Medium / AudioGen Medium）を tools/audiocraft に導入し、入口ページ（7862）から使えるようにする（開始 2026-10-27）
-- comfyui-vfx — ComfyUI にゲームのエフェクト（Wan 2.1 Alpha・LayerDiffuse）を入れ、8080 と他の PC の API から使えるようにする（開始 2026-11-25）

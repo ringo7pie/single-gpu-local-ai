@@ -142,8 +142,20 @@ def make_handler(state: FakeState):
                 }})
             if path.startswith("/view?"):
                 return self._send(200, PNG_BYTES, "image/png")
+            if path == "/api":
+                return self._json(200, {"comfyui": {"workflows": [
+                    {"name": "VFX/WanAlpha_T2V_api.json", "inputs": {
+                        "prompt": "6.text", "negative_prompt": "7.text", "seed": "3.seed", "steps": "3.steps", "cfg": "3.cfg",
+                        "width": "40.width", "height": "40.height", "frames": "40.length",
+                        "png_filename_prefix": "93.filename_prefix", "webp_filename_prefix": "80.filename_prefix"}},
+                    {"name": "VFX/LayerDiffuse_SDXL_RGBA_api.json", "inputs": {
+                        "prompt": "6.text", "seed": "3.seed", "width": "5.width", "height": "5.height",
+                        "filename_prefix": "27.filename_prefix"}},
+                ]}})
             if path.startswith("/api/userdata/"):
                 name = urllib.parse.unquote(path[len("/api/userdata/"):])
+                if name in ("workflows/VFX/WanAlpha_T2V_api.json", "workflows/VFX/LayerDiffuse_SDXL_RGBA_api.json"):
+                    return self._json(200, {node: {"class_type": "X", "inputs": {}} for node in ("3", "5", "6", "7", "27", "40", "80", "93")})
                 if name == "workflows/VFX/Test_api.json":
                     return self._json(200, {"6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a"}}})
                 return self._json(404, {"error": "not found"})
@@ -382,7 +394,7 @@ def test_mcp_handshake_and_call(fake):
     assert by_id[1]["result"]["protocolVersion"] == "2025-03-26"
     names = {tool["name"] for tool in by_id[2]["result"]["tools"]}
     assert {"localai_status", "localai_service", "localai_ollama", "localai_chat", "localai_music", "localai_sound", "localai_stable_audio",
-            "localai_tts", "localai_mesh", "localai_comfyui", "localai_comfyui_result",
+            "localai_tts", "localai_mesh", "localai_comfyui", "localai_comfyui_result", "localai_vfx",
             "localai_gradio_info", "localai_gradio_call"} == names
     for tool in by_id[2]["result"]["tools"]:
         assert tool["inputSchema"]["type"] == "object" and "handler" not in tool
@@ -657,6 +669,41 @@ def test_comfyui_saved_workflow(fake):
     assert error and "ありません" in text
     for bad in ("../secret.json", "/etc/x.json", "VFX/a.txt"):
         assert call("localai_comfyui", {"workflow_name": bad})[0]
+
+
+def test_vfx_wan_alpha_sets_named_inputs(fake):
+    fake.states["comfyui"] = "running"
+    error, result = call("localai_vfx", {"kind": "wan_alpha", "prompt": "mist", "seed": 7, "width": 480, "height": 480,
+                                          "frames": 49, "filename_prefix": "mist_a"})
+    assert not error, result
+    inputs = {node: body["inputs"] for node, body in fake.comfy_prompts[result["prompt_id"]].items()}
+    assert inputs["6"]["text"] == "mist" and inputs["3"]["seed"] == 7
+    assert (inputs["40"]["width"], inputs["40"]["height"], inputs["40"]["length"]) == (480, 480, 49)
+    assert inputs["93"]["filename_prefix"] == "dq_vfx_trial/mist_a"
+    assert inputs["80"]["filename_prefix"] == "dq_vfx_trial/mist_a_webp"
+    assert result["status"] == "success" and result["kind"] == "wan_alpha"
+
+
+def test_vfx_rejects_bad_sizes_and_kinds(fake):
+    fake.states["comfyui"] = "running"
+    for bad in (
+        {"kind": "layerdiffuse", "prompt": "spark", "width": 1000},
+        {"kind": "wan_alpha", "prompt": "mist", "frames": 80},
+        {"kind": "layerdiffuse", "prompt": "spark", "frames": 49},
+        {"kind": "wan_alpha", "prompt": "mist", "filename_prefix": "../x"},
+        {"kind": "bogus", "prompt": "x"},
+        {"kind": "wan_alpha", "prompt": " "},
+    ):
+        assert call("localai_vfx", bad)[0], bad
+
+
+def test_vfx_requires_running_or_start(fake):
+    error, text = call("localai_vfx", {"kind": "layerdiffuse", "prompt": "spark"})
+    assert error and "localai_service" in text
+    fake.states["stable-audio"] = "running"
+    error, result = call("localai_vfx", {"kind": "layerdiffuse", "prompt": "spark", "start": True})
+    assert not error and result["status"] == "not_started"
+    assert {item["key"] for item in result["start"]["would_stop"]} == {"stable-audio"}
 
 
 def test_check_command(fake, capsys):

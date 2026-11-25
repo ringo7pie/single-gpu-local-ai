@@ -184,7 +184,14 @@
     </ol>
     <p>API の一覧（エンドポイント・入力の対応）は <a id="api-link" href="/api">入口ページの <code>GET /api</code></a> の <code>comfyui</code> にもある。
       Claude Code / Codex からは MCP の <code>localai_comfyui</code> に <code>workflow_name: "VFX/WanAlpha_T2V_api.json"</code> と
-      <code>set: {"6.text": "…", "3.seed": 1}</code> を渡すと、投入から出力の保存まで行う（<code>tools/localai-mcp</code>）。</p>
+      <code>set: {"6.text": "…", "3.seed": 1}</code> を渡すと、投入から出力の保存まで行う（<code>tools/localai-mcp</code>）。
+      もっと簡単には <code>localai_vfx</code> に <code>kind</code>（<code>wan_alpha</code> か <code>layerdiffuse</code>）・<code>prompt</code>・<code>seed</code>・
+      <code>width</code>・<code>height</code>・<code>frames</code> を名前で渡す。</p>
+    <p>MCP を他の PC に入れる・更新する（終わったら Claude Code を開き直す）。Windows の PowerShell に 3 行を貼る:<br>
+      <code>$ProgressPreference = 'SilentlyContinue'</code><br>
+      <code>Invoke-WebRequest -UseBasicParsing http://&lt;server&gt;:8080/remote/setup-remote.ps1 -OutFile $env:TEMP\setup-remote.ps1</code><br>
+      <code>powershell -ExecutionPolicy Bypass -File $env:TEMP\setup-remote.ps1 -ServerIp &lt;server&gt;</code><br>
+      cmd から・Linux / macOS からのコマンドは <code>GET /api</code> の <code>mcp</code>（Linux / macOS: <code>curl -fsSL http://&lt;server&gt;:8080/remote/setup-remote.sh | bash -s -- &lt;server&gt;</code>）。</p>
   </section>
 
   <section id="inputs">

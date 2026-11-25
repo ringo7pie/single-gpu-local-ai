@@ -22,6 +22,9 @@ T5 は `--t5_cpu` で CPU に置く（GPU に置くと DiT と合わせて 24 GB
 
 ## 導入
 
+2026-11-25 の試しの後、重み（`models/`、66 GB）・`.venv`・`vendor/` は消した（ディスクの空きのため）。試しの出力（`output/`）とログは残している。
+もう一度動かすときは、下の手順で取り直す。
+
 ```bash
 cd tools/wan-alpha-v2
 git clone https://github.com/WeChatCV/Wan-Alpha.git vendor/Wan-Alpha
@@ -40,6 +43,27 @@ GPU を使うほかのサービス（ComfyUI など）を止めてから:
 ./run-trial.sh v2_832x480_f81 '832*480' 81     # 出力は output/<タグ>/（checkerboard.mp4 と RGBA の PNG の pngs.zip）、trial.json に秒数と VRAM
 WAN_ALPHA_PROMPT="..." ./run-trial.sh <タグ>   # プロンプトを変える
 ```
+
+## 実機試験の結果（2026-11-25、ComfyUI を止めて GPU を空けた状態。`run-trial.sh v2_832x480_f81 '832*480' 81`）
+
+プロンプト「a swirling cloud of glowing violet magic mist, soft wisps, centered, no background」、832x480・81 コマ・LightX2V 4 ステップ・cfg 1.0・seed 42。
+
+| 段 | 時刻の差 |
+|---|---|
+| T5・VAE の読み込み〜DiT の読み込み・DoRA / LightX2V の合成・INT8 化 | 約 3 分（15:52:59 → 15:56:02） |
+| T5（CPU）で文章を埋め込む | 約 3 分 20 秒（〜15:59:18） |
+| サンプリング 4 ステップ | 84 秒（20.9 秒/ステップ） |
+| VAE で戻して保存 | 約 30 秒 |
+| 合計 | 503.7 秒 |
+
+- VRAM の最大は 11859 MiB（nvidia-smi の機体全体）。INT8 の重み（13.09 GiB）は pinned の CPU に置いて使うたびに送る（`WAN_INT8_STREAM=1`、既定）。
+  GPU に置いたまま（`WAN_INT8_STREAM=0`）では、81 コマで 1 ステップ目に VRAM が足りなくなった（PyTorch の確保 20.34 GiB）。
+- RAM は読み込み中に 36 GiB、swap は 14 GiB まで使った（DiT の bf16 28.6 GB と T5 11 GB を CPU に持つため）。
+- 出力は `output/<タグ>/<時刻>/checkerboard.mp4`（市松の背景に重ねた確認用の動画）と `pngs.zip`（RGBA の PNG 81 枚、832x480）。
+  81 枚の平均で 75% の画素のアルファが 0、縁の 99.7% が 0（四隅に 5 以下が残るコマがある）。
+- 同じプロンプトで v1.0（ComfyUI の Wan 2.1 Alpha）は光る渦になったが、v2.0 は中央にまとまった不透明に近い青い雲になった
+  （上流の台本は gauss_mask で中央の楕円に寄せる）。どちらが良いかは用途で決めること。
+- 上流の requirements.txt に無い `av` を足した。上流のモデルは `flash_attention()` を直接呼ぶので flash-attn（2.8.3 の公式 wheel）が要る。
 
 ## ライセンス
 
