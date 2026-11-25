@@ -6,7 +6,7 @@
 
 | 一言 | 内容 |
 |---|---|
-| 作ったもの | GPU 排他の入口ページ・MoE 推論サーバーの運用・3D 生成の導入・Claude Code / Codex 連携・モデル評価ハーネス |
+| 作ったもの | GPU 排他の入口ページ・MoE 推論サーバーの運用・3D 生成の導入・Claude Code / Codex 連携・モデル評価ハーネス・**他の PC から MCP と HTTP の API で全サービスを使う口** |
 | 規模 | 11 のツール（Python・bash・HTML）、追跡ファイルは約 700、計測の記録は JSON で全件保存 |
 | 検証 | GPU を使わない単体試験（ツールごと）、実機の疎通試験、10 の AI の比較評価（コーディング・3D 数学ほか） |
 | 見てほしい所 | ①資源の排他の設計 ②評価の方法と、それで見つけた事実 ③導入を再現可能にする作法 ④ライセンスの扱い |
@@ -20,6 +20,8 @@
 3. **「どのモデルを何に使うか」を、感覚でなく測って決めたい。** 速さと正しさの両方を、同じ問題・同じ採点で。
 4. **クラウドの AI に作業を頼みつつ、機械的な反復だけはローカルで回したい。** 費用と秘匿の両方を見て。
 5. **他人（と未来の自分）が、同じ環境を再現できること。** 上流の版の固定、非対話の導入、再実行しても壊れないこと。
+6. **別の PC（Windows）の Claude Code から、このサーバーの AI を道具として使いたい。** サービスの起動・停止から生成・出力の受け取りまで、
+   相手の PC にリポジトリを置かずに。GPU は 1 枚なので、他人の作業を勝手に止めないことも条件。
 
 ## 2. 設計の判断（と、その根拠）
 
@@ -32,6 +34,9 @@
 | 操作 API に **独自ヘッダを必須**にする | 認証の無い LAN サービスで、ほかのサイトの JavaScript からの単純な POST を、ブラウザの preflight で防ぐ | `knowledge/10-silver/areas/web-services.md` |
 | 上流は**固定コミット**で取り込み、直接は直さず `patches/` で当てる | 再実行しても結果が同じ（戻してから当て直す）。1 枚ずつ「当たっているか」を判定する方式は、パッチどうしの文脈行が重なると破綻した（実例あり） | `knowledge/10-silver/resources/hunyuan3d-upstream.md` |
 | 3D の背景除去モデルを**ライセンスで選ぶ** | 上流既定の RMBG-2.0 は CC BY-NC 4.0（非商用）。MIT の BiRefNet に差し替えた | `tools/pixal3d/README.md` |
+| 他の PC 向けの口を **入口ページの HTTP API と、標準ライブラリだけの MCP** の 2 段にする | API（`GET /api` が一覧、`start?wait=` で使えるまで待つ）を正本にし、MCP（`localai-mcp`）はその上の薄い層。ComfyUI のワークフローの「どのノードのどの入力か」の対応も API に 1 か所だけ置き、MCP はそれを読む（2 か所に書くと食い違う） | `tools/portal/portal.py`・`tools/localai-mcp/` |
+| MCP は **他のサービスを止める起動を、明示が無い限りしない** | GPU の排他で止まるもの・降ろされる Ollama のモデルを先に返し、`stop_others=true` のときだけ起動する。他の人の生成を、AI の判断で落とさないため | `tools/localai-mcp/README.md` |
+| 導入は **入口ページが配るインストーラー 1 つ**にする | Windows はダブルクリックの `.cmd`（入口ページがサーバーの住所を書き込んで作る）。Host ヘッダは相手が書けるので、`.cmd` に入れるホスト名は英数字・点・ハイフンだけに絞る。入れ子の `powershell -c` で `irm` すると Windows PowerShell 5.1 が進捗バーの描画で落ちた実例から、入れ子にせず進捗を切る | `tools/portal/portal.py` の `build_windows_installer` |
 | 評価の問題・採点器・記録を**一緒に版管理** | 後から同じ条件で再採点・比較できる。解説書の本文は問題の原文と照合し、食い違えば HTML を作らず止まる | `tools/model-eval/` |
 
 ## 3. 計測した数値
@@ -110,6 +115,18 @@ Strata のコーディングの点が低いのは設定の誤りではないか�
   **全視点で縮尺を揃えてから渡す**と、上端 0.459・幅 / 高さ 0.43（入力写真の比 0.41 と一致）に戻った。
   出典: `knowledge/10-silver/resources/pixal3d-upstream.md`。
 
+### 3.6 他の PC から使う（2026-11-25、MCP と HTTP の API）
+
+| 経路 | 内容 | 結果 |
+|---|---|---|
+| 他の PC（Windows）の Claude Code → HTTP の API | 入口ページで ComfyUI を起動し（`start?wait=900`）、保存済みの API 形式のワークフロー（`workflows/VFX/`）で連続生成し、終わったら API で止めた | 続けて生成できた（ComfyUI のログで 1 本 26〜201 秒） |
+| MCP（`localai_vfx`、LAN の住所に繋いで） | LayerDiffuse 1024x1024・20 ステップ | 21 秒、RGBA の PNG を手元に保存 |
+| 同上 | Wan 2.1 Alpha 480x480・17 コマ・4 ステップ | 27 秒、RGBA の PNG 17 枚とアニメ WebP |
+| 導入 | 入口ページから `setup-remote.sh` を流す（Linux）／PowerShell の 3 行（Windows） | Linux は本体と同じファイルが入った。Windows の Claude Code は `/mcp` で localai が connected（14 ツール） |
+
+サーバー側で測った生成そのものの値（Wan 2.1 Alpha 832x480・81 コマで 121 秒・VRAM 21447 MiB など）は
+`tools/comfyui/README.md` の「ゲームのエフェクト」。
+
 ## 4. 技術スタック
 
 | 領域 | 使ったもの |
@@ -117,7 +134,7 @@ Strata のコーディングの点が低いのは設定の誤りではないか�
 | 言語 | Python 3.10〜3.12（uv 管理の venv）・bash・HTML / CSS / JavaScript（依存なしの入口ページ） |
 | 推論 | Ollama・Strata（MoE の CPU-GPU 分担。engine を CUDA 13.2・sm_80 でビルド）・llama.cpp 系の GGUF |
 | 3D・画像 | Hunyuan3D-2mv・Pixal3D（TRELLIS.2 系）・ComfyUI・WTiVo（CGAL・OpenVDB・CUDA 12.6 のビルド） |
-| 連携 | MCP（stdio）・OpenCode・SQLite の台帳・git worktree による隔離 |
+| 連携 | MCP（stdio。クラウドの AI からローカル Qwen へ・他の PC からこのサーバーへの 2 方向）・HTTP の API（入口ページ・ComfyUI）・OpenCode・SQLite の台帳・git worktree による隔離 |
 | 運用 | systemd --user・cgroup のメモリ上限・ufw・SSH トンネル |
 | 品質 | pytest（GPU 不要の単体試験）・隠しテストによる採点の sandbox・記録から生成する HTML（手で書き換えない） |
 

@@ -30,7 +30,8 @@ VFX のワークフローを直すとき、上流や重みを替えるとき、�
 
 - MCP は localai-mcp 0.3.0 の `localai_vfx`（kind=wan_alpha | layerdiffuse）。入力の対応は入口ページの `GET /api` の `comfyui.workflows` から読む。
 - 入口ページの `GET /remote/{localai_mcp.py,setup-remote.ps1,setup-remote.sh}` が MCP の本体と導入の台本を配る。`GET /api` の `mcp` に導入のコマンドがある。
-  `.sh` を入口ページから流す導入と、LAN の住所での `localai_vfx`（両 kind）は実測で通った。`.ps1` はこの機体に PowerShell が無く試していない。
+  `.sh` を入口ページから流す導入と、LAN の住所での `localai_vfx`（両 kind）は実測で通った。Windows は PowerShell の 3 行で `.ps1` を流し、
+  Claude Code の `/mcp` で localai が connected・14 ツールになった（2026-11-25、他の PC）。`install-localai-mcp.cmd` のダブルクリックは試していない。
 - Windows PowerShell 5.1 で `powershell -c "irm … -OutFile …"` を入れ子で動かすと、進捗バーの描画で `out-lineoutput : インデックスが配列の境界外です`
   （IndexOutOfRangeException）と落ちた（他の PC、2026-11-25）。`$ProgressPreference = 'SilentlyContinue'` と入れ子にしない形で避ける。
   入口ページの「他の PC から使う」の欄が `install-localai-mcp.cmd`（ダブルクリックで導入・更新）を配る。
